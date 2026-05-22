@@ -1,0 +1,9 @@
+version: 1
+name: cycle-fixture-workflow
+before_run:
+  - command -v git
+  - ./bin/cycle doctor --legacy
+states:
+  queued: Todo
+  active: In Progress
+  review: In Review
