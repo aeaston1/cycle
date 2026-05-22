@@ -3,7 +3,7 @@ defmodule Cycle.CLI do
   Command-line entrypoint for Cycle.
   """
 
-  @version Mix.Project.config()[:version]
+  @version System.get_env("CYCLE_VERSION") || Mix.Project.config()[:version]
   @default_symphony_repo "https://github.com/openai/symphony.git"
   @default_symphony_ref "main"
   @default_state_url "http://127.0.0.1:4000/api/v1/state"

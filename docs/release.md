@@ -11,13 +11,23 @@ not be hardcoded into public docs or generated config outside release metadata.
 
 ## Release Artifacts
 
-The first release can ship as a source archive containing:
+Build a versioned release artifact with:
+
+```sh
+mix release.artifact v0.1.0
+```
+
+The command writes `dist/cycle-v0.1.0.tar.gz` and
+`dist/cycle-v0.1.0.tar.gz.sha256`. The archive contains:
 
 - `bin/cycle`
 - `README.md`
 - `docs/`
 - `packaging/homebrew/cycle.rb` as a draft formula reference
 - license file
+
+`bin/cycle` in the archive is a packaged executable, not the source-tree
+development wrapper.
 
 Later releases can add compiled binaries if Cycle gains a compiled daemon.
 
@@ -60,8 +70,8 @@ installation belongs behind `cycle service install`.
 2. Run CLI smoke tests.
 3. Run automated tests.
 4. Create a versioned tag.
-5. Build release archive.
-6. Compute checksum.
+5. Build release archive with `mix release.artifact vX.Y.Z`.
+6. Read checksum from `dist/cycle-vX.Y.Z.tar.gz.sha256`.
 7. Publish release artifact.
 8. Update Homebrew tap formula URL and checksum.
 9. Test `brew install aeaston1/tap/cycle`.
