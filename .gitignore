@@ -19,6 +19,9 @@ config/*secrets*
 # Release output
 dist/
 build/
+_build/
+deps/
+/cycle
 *.tar.gz
 *.zip
 *.sha256
