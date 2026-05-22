@@ -17,7 +17,7 @@ class Cycle < Formula
   def install
     bin.install "bin/cycle"
     doc.install "README.md"
-    doc.install "docs/architecture.md"
+    doc.install "docs"
   end
 
   test do
