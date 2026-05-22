@@ -110,12 +110,25 @@ defmodule Cycle.CLITest do
     assert Cycle.CLI.run(["start"]) == {:error, "cycle start requires --workflow PATH", 1}
   end
 
-  test "service placeholders remain explicit" do
+  test "service install placeholder remains explicit and service status reports safely" do
     install_output = capture_io(fn -> assert Cycle.CLI.run(["service", "install"]) == :ok end)
     status_output = capture_io(fn -> assert Cycle.CLI.run(["service", "status"]) == :ok end)
 
     assert install_output =~ "Service installation is not implemented yet."
-    assert status_output =~ "Service status is not implemented yet."
+    assert status_output =~ "Cycle service status"
+    assert status_output =~ "installed:"
+    assert status_output =~ "state:"
+    assert status_output =~ "logs:"
+  end
+
+  test "service status supports json output" do
+    output = capture_io(fn -> assert Cycle.CLI.run(["service", "status", "--json"]) == :ok end)
+    payload = Jason.decode!(output)
+
+    assert Map.has_key?(payload, "service")
+    assert Map.has_key?(payload, "config_path")
+    assert Map.has_key?(payload, "state_path")
+    assert Map.has_key?(payload, "api_health")
   end
 
   test "unknown commands return a user error" do

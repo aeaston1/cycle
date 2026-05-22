@@ -155,7 +155,8 @@ The backing behavior is intentionally staged:
 
 - `doctor`, `linear configure`, `symphony install/path`, `project opt-in`, `project discover`, and `status` have useful scaffold behavior now.
 - `start` runs a managed Symphony engine in the foreground when an engine and workflow are present.
-- `service install` and `service status` remain placeholders until Cycle owns daemon installation.
+- `service install` remains a placeholder until Cycle owns daemon installation.
+- `service status` reports a read-only service snapshot and does not start, stop, enable, disable, reload, or restart services.
 
 The intended command responsibilities:
 

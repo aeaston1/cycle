@@ -37,6 +37,9 @@ cycle status
 - `cycle service install`
 - `cycle service status`
 
+`cycle service status` reports a read-only service snapshot without starting,
+stopping, enabling, disabling, reloading, or restarting services.
+
 ## Project Opt-In
 
 Projects opt in through Linear project metadata using the `cycle:` namespace.
