@@ -364,7 +364,7 @@ defmodule Cycle.Reconciler do
         engine_registry: engine_registry,
         run_store: run_store,
         global_capacity: get_in(config.scheduler, ["max_concurrent_runs"]),
-        budget_mode: get_in(config.scheduler, ["budget", "mode"]) || "warn",
+        scheduler: config.scheduler,
         worker_host: hostname(),
         refresh_issue: Keyword.get(opts, :refresh_issue, &Client.refresh_issue(client, &1.id))
       )

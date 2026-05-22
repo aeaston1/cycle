@@ -381,6 +381,14 @@ defmodule Cycle.CLI do
     drifted_projects = snapshot["projects"]["details"] |> Enum.count(&(&1["status"] == "drift"))
     puts("  policy drift: #{drift["count"]} records across #{drifted_projects} projects")
 
+    Enum.each(snapshot["pressure"] || %{}, fn {name, gate} ->
+      if gate["status"] in ["warn", "blocked"] do
+        puts(
+          "  #{String.replace(name, "_", "-")} pressure: #{gate["status"]} - #{gate["reason"]}"
+        )
+      end
+    end)
+
     Enum.each(snapshot["discovery"]["last_errors"], fn error ->
       puts("  discovery error: #{error["project"] || "unknown"}: #{error["error"]}")
     end)

@@ -24,6 +24,7 @@ defmodule Cycle.StatusSnapshotTest do
                "last_errors",
                "linear",
                "paths",
+               "pressure",
                "projects",
                "registries",
                "runs",
@@ -45,7 +46,51 @@ defmodule Cycle.StatusSnapshotTest do
       assert snapshot["runs"]["counts"]["running"] == 0
       assert snapshot["runs"]["counts"]["queued"] == 0
       assert snapshot["drift"] == %{"count" => 0, "top" => []}
+      assert snapshot["pressure"]["budget"]["status"] == "ok"
+      assert snapshot["pressure"]["rate_limit"]["status"] == "ok"
       assert is_binary(Jason.encode!(snapshot))
+    end)
+  end
+
+  test "status reports configured pressure reasons" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{config_home: config_home} ->
+      config_dir = Path.join(config_home, "cycle")
+      File.mkdir_p!(config_dir)
+
+      File.write!(
+        Path.join(config_dir, "config.yaml"),
+        """
+        scheduler:
+          budget:
+            mode: warn
+            pressure: true
+            reason: token usage is high
+          rate_limit:
+            mode: block
+            pressure: true
+            reason: Linear rate limit is low
+        """
+      )
+
+      assert {:ok, snapshot} =
+               StatusSnapshot.build(
+                 api_get: fn _url, _opts -> {:error, :closed} end,
+                 health_opts: [checked_at: @t0]
+               )
+
+      assert snapshot["pressure"]["budget"] == %{
+               "mode" => "warn",
+               "pressure" => true,
+               "reason" => "token usage is high",
+               "status" => "warn"
+             }
+
+      assert snapshot["pressure"]["rate_limit"] == %{
+               "mode" => "block",
+               "pressure" => true,
+               "reason" => "Linear rate limit is low",
+               "status" => "blocked"
+             }
     end)
   end
 

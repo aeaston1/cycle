@@ -59,6 +59,7 @@ defmodule Cycle.StatusSnapshot do
       "engines" => engine_summary(config, engines, health_opts),
       "runs" => run_summary(runs),
       "capacity" => capacity_summary(config, projects, engines, runs),
+      "pressure" => Cycle.Scheduler.pressure_state(scheduler: config.scheduler),
       "drift" => drift,
       "discovery" => %{"last_errors" => discovery_errors(projects)},
       "last_errors" => last_errors(projects, runs, engines),

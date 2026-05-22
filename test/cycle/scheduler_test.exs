@@ -204,10 +204,70 @@ defmodule Cycle.SchedulerTest do
            ] = Scheduler.decide([issue()], opts(refresh_issue: refresh))
   end
 
-  test "budget block mode has a stable disabled gate reason" do
+  test "warn mode reports pressure without blocking dispatch" do
     assert [
-             %Scheduler.Decision{status: :queued, reason_code: "budget_rate_limited"}
-           ] = Scheduler.decide([issue()], opts(budget_mode: "block"))
+             %Scheduler.Decision{
+               status: :dispatch,
+               details: %{pressure: %{"budget" => %{"status" => "warn"}}}
+             }
+           ] =
+             Scheduler.decide(
+               [issue()],
+               opts(
+                 budget: %{"mode" => "warn", "pressure" => true, "reason" => "token usage high"}
+               )
+             )
+  end
+
+  test "block mode prevents new dispatch with pressure reason" do
+    assert [
+             %Scheduler.Decision{
+               status: :queued,
+               reason_code: "scheduler_pressure_blocked",
+               message: "operator budget limit reached",
+               details: %{"pressure" => %{"gate" => "budget", "status" => "blocked"}}
+             }
+           ] =
+             Scheduler.decide(
+               [issue()],
+               opts(
+                 budget: %{
+                   "mode" => "block",
+                   "pressure" => true,
+                   "reason" => "operator budget limit reached"
+                 }
+               )
+             )
+  end
+
+  test "rate-limit pressure can block new dispatch" do
+    assert [
+             %Scheduler.Decision{
+               status: :queued,
+               reason_code: "scheduler_pressure_blocked",
+               details: %{"pressure" => %{"gate" => "rate_limit", "status" => "blocked"}}
+             }
+           ] =
+             Scheduler.decide(
+               [issue()],
+               opts(rate_limit: %{"mode" => "block", "pressure" => true})
+             )
+  end
+
+  test "running run is not stopped solely due to new pressure" do
+    assert [
+             %Scheduler.Decision{
+               status: :queued,
+               reason_code: "issue_already_active"
+             }
+           ] =
+             Scheduler.decide(
+               [issue()],
+               opts(
+                 runs: [run("running")],
+                 budget: %{"mode" => "block", "pressure" => true}
+               )
+             )
   end
 
   defp engine(single_issue) do
