@@ -301,7 +301,10 @@ defmodule Cycle.StatusSnapshot do
   end
 
   defp redact_event(nil), do: nil
-  defp redact_event(event) when is_map(event), do: Map.take(event, ["summary", "code", "reason"])
+
+  defp redact_event(event) when is_map(event),
+    do: Map.take(event, ["summary", "code", "reason", "reason_code", "type", "message"])
+
   defp redact_event(_event), do: nil
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""

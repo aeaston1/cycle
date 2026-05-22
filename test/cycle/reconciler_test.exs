@@ -59,7 +59,133 @@ defmodule Cycle.ReconcilerTest do
     end)
   end
 
-  defp stub_linear(name) do
+  test "due retry refreshes issue state and stores the next retry time for transient gates" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_workflow!(checkout_path)
+      stub_linear(name)
+      seed_retrying_run!(cycle_home)
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 no_dispatch: true,
+                 local_checkout_paths: [checkout_path],
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 retry_base_delay_seconds: 30,
+                 retry_max_delay_seconds: 60,
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%RunStore.Run{state: "retrying", retry: retry, last_event: event} | _] =
+               result.recorded
+
+      assert retry["attempt"] == 2
+      assert retry["next_retry_at"] == "2026-05-22T12:01:00Z"
+      assert event["type"] == "retry_scheduled"
+      assert event["reason_code"] == "engine_unhealthy"
+    end)
+  end
+
+  test "terminal refreshed issue suppresses a due retry as stale" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_workflow!(checkout_path)
+
+      stub_linear(name,
+        refresh_issue: linear_issue(%{"state" => %{"name" => "Done", "type" => "completed"}})
+      )
+
+      seed_retrying_run!(cycle_home)
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 no_dispatch: true,
+                 local_checkout_paths: [checkout_path],
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%RunStore.Run{state: "stale", last_event: event} | _] = result.recorded
+      assert event["type"] == "retry_suppressed"
+      assert event["reason_code"] == "issue_terminal"
+    end)
+  end
+
+  test "invalid workflow suppresses a due retry as stale" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      File.mkdir_p!(checkout_path)
+      File.write!(Path.join(checkout_path, "WORKFLOW.md"), "# Missing front matter\n")
+      stub_linear(name)
+      seed_retrying_run!(cycle_home)
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 no_dispatch: true,
+                 local_checkout_paths: [checkout_path],
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%RunStore.Run{state: "stale", last_event: event} | _] = result.recorded
+      assert event["reason_code"] == "workflow_invalid"
+    end)
+  end
+
+  defp stub_linear(name, opts \\ []) do
+    refreshed_issue = Keyword.get(opts, :refresh_issue, linear_issue())
+
     Req.Test.stub(name, fn conn ->
       assert conn.method == "POST"
       {:ok, body, conn} = read_body(conn)
@@ -87,7 +213,7 @@ defmodule Cycle.ReconcilerTest do
           })
 
         query =~ "CycleRefreshIssue" ->
-          Req.Test.json(conn, %{"data" => %{"issue" => linear_issue()}})
+          Req.Test.json(conn, %{"data" => %{"issue" => refreshed_issue}})
       end
     end)
   end
@@ -107,24 +233,63 @@ defmodule Cycle.ReconcilerTest do
     }
   end
 
-  defp linear_issue do
-    %{
-      "id" => "issue-id",
-      "identifier" => "AEA-200",
-      "title" => "Fixture issue",
-      "url" => "https://linear.app/example/issue/AEA-200/fixture",
-      "branchName" => "owner/fixture",
-      "priority" => 3,
-      "priorityLabel" => "Medium",
-      "createdAt" => "2026-05-22T10:00:00Z",
-      "updatedAt" => "2026-05-22T11:00:00Z",
-      "state" => %{"name" => "Todo", "type" => "unstarted"},
-      "assignee" => nil,
-      "labels" => %{"nodes" => []},
-      "inverseRelations" => %{"nodes" => []},
-      "project" => %{"id" => "project-id"},
-      "team" => %{"id" => "team-id"}
-    }
+  defp linear_issue(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "id" => "issue-id",
+        "identifier" => "AEA-200",
+        "title" => "Fixture issue",
+        "url" => "https://linear.app/example/issue/AEA-200/fixture",
+        "branchName" => "owner/fixture",
+        "priority" => 3,
+        "priorityLabel" => "Medium",
+        "createdAt" => "2026-05-22T10:00:00Z",
+        "updatedAt" => "2026-05-22T11:00:00Z",
+        "state" => %{"name" => "Todo", "type" => "unstarted"},
+        "assignee" => nil,
+        "labels" => %{"nodes" => []},
+        "inverseRelations" => %{"nodes" => []},
+        "project" => %{"id" => "project-id"},
+        "team" => %{"id" => "team-id"}
+      },
+      overrides
+    )
+  end
+
+  defp seed_retrying_run!(cycle_home) do
+    path = Path.join(cycle_home, "runs.yaml")
+
+    assert {:ok, run} =
+             RunStore.create_queued(
+               path,
+               %{
+                 "id" => "run-1",
+                 "issue" => %{
+                   "id" => "issue-id",
+                   "identifier" => "AEA-200",
+                   "title" => "Fixture issue",
+                   "state" => "Todo",
+                   "url" => "https://linear.app/example/issue/AEA-200/fixture"
+                 },
+                 "project" => %{"id" => "project-id", "name" => "Cycle Fixture"},
+                 "engine" => %{"id" => "openai-symphony@main", "name" => "openai-symphony"},
+                 "workflow_path" => "WORKFLOW.md",
+                 "workflow_hash" => "sha256:abc123",
+                 "workspace_path" => Path.join(cycle_home, "workspaces/AEA-200"),
+                 "retry" => %{
+                   "attempt" => 1,
+                   "max_attempts" => 3,
+                   "next_retry_at" => "2026-05-22T11:59:00Z"
+                 }
+               },
+               now: "2026-05-22T11:50:00Z"
+             )
+
+    assert {:ok, _running} =
+             RunStore.transition(path, run.id, "running", %{}, now: "2026-05-22T11:51:00Z")
+
+    assert {:ok, _retrying} =
+             RunStore.transition(path, run.id, "retrying", %{}, now: "2026-05-22T11:52:00Z")
   end
 
   defp write_workflow!(root) do

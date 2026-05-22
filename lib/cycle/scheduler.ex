@@ -184,6 +184,9 @@ defmodule Cycle.Scheduler do
       active_run = active_run_for_issue(issue, context.runs) ->
         run_decision(issue, active_run)
 
+      project_status(issue) == "disabled" ->
+        skipped(issue, "project_disabled", "project is disabled")
+
       project_status(issue) == "invalid" ->
         blocked(issue, "workflow_invalid", "project workflow is invalid")
 

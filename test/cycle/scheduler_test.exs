@@ -155,6 +155,10 @@ defmodule Cycle.SchedulerTest do
 
   test "invalid workflow and blocking drift prevent dispatch" do
     assert [
+             %Scheduler.Decision{status: :skipped, reason_code: "project_disabled"}
+           ] = Scheduler.decide([issue(%{project: project(%{"status" => "disabled"})})], opts())
+
+    assert [
              %Scheduler.Decision{status: :blocked, reason_code: "workflow_invalid"}
            ] = Scheduler.decide([issue(%{project: project(%{"status" => "invalid"})})], opts())
 
