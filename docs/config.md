@@ -91,6 +91,10 @@ scheduler:
   stale_run_timeout_ms: 300000
   budget:
     mode: warn
+    pressure: false
+  rate_limit:
+    mode: warn
+    pressure: false
 
 review_judge:
   enabled: false
@@ -132,6 +136,12 @@ The current scaffold writes a minimal `config.yaml` from
 default; when true for a managed Symphony engine, `cycle start` may include the
 upstream no-guardrails flag for foreground operator testing. Full dispatch
 policy loading is planned behavior.
+
+Scheduler budget and rate-limit gates accept `mode: off`, `mode: warn`, or
+`mode: block`. When `pressure: true`, warn mode reports the pressure in
+`cycle status` and scheduler decisions without blocking new work; block mode
+prevents new dispatch with the configured `reason`. Existing running work is
+not stopped by these gates.
 
 ## Legacy Config Compatibility
 
@@ -195,6 +205,12 @@ Policy enforcement modes:
 The first public version should default to `report`. Propagation should be
 manual and should stage narrow repo changes, never silently rewrite project
 workflows during discovery.
+
+`cycle policy drift` lists persisted drift records from the project registry.
+`cycle policy propagate --project PROJECT --dry-run` renders a proposed
+workflow patch without changing files. Apply mode is explicit and refuses dirty
+project worktrees unless the operator passes the dirty-worktree override.
+Generated edits are limited to propagation-available workflow policy fields.
 
 ## Secrets
 

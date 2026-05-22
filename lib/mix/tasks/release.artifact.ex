@@ -18,6 +18,7 @@ defmodule Mix.Tasks.Release.Artifact do
          :ok <- require_clean_output(root),
          :ok <- build_escript(tag),
          {:ok, archive} <- stage_and_archive(root, tag),
+         :ok <- validate_archive(archive),
          {:ok, checksum} <- write_checksum(archive) do
       Mix.shell().info("Built #{Path.relative_to_cwd(archive)}")
       Mix.shell().info("SHA-256 #{checksum}")
@@ -100,5 +101,22 @@ defmodule Mix.Tasks.Release.Artifact do
     checksum_path = archive <> ".sha256"
     File.write!(checksum_path, "#{hash}  #{Path.basename(archive)}\n")
     {:ok, hash}
+  end
+
+  defp validate_archive(archive) do
+    case Cycle.Security.scan_archive(archive, Cycle.Security.fake_secret_values()) do
+      {:ok, []} -> :ok
+      {:ok, findings} -> {:error, release_scan_error(findings)}
+      {:error, message} -> {:error, "release artifact validation #{message}"}
+    end
+  end
+
+  defp release_scan_error(findings) do
+    details =
+      findings
+      |> Enum.map(fn finding -> "#{finding.path}: #{finding.reason}: #{finding.value}" end)
+      |> Enum.join("\n")
+
+    "release artifact contains forbidden secret or private-repo value:\n#{details}"
   end
 end

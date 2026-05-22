@@ -115,6 +115,12 @@ Optional propagation should be explicit and auditable. A propagation action may
 prepare a branch, commit, or pull request that updates only review judge policy
 fields in the repo workflow.
 
+The first propagation command is dry-run first: it prints the proposed workflow
+patch from recorded drift and does not mutate the project repo. Because workflow
+front matter is rewritten with Cycle's YAML emitter only where needed, comments
+inside edited YAML blocks are not guaranteed to be preserved; operators should
+review the patch before applying it.
+
 ## Evidence Hash
 
 Cycle should hash stable evidence inputs and include the hash in the judge
