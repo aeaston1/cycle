@@ -2,8 +2,7 @@
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  project_discovery:
-    mode: opt_in_descriptions
+  project_slug: "053608165614"
   active_states:
     - Todo
     - In Progress
@@ -18,16 +17,52 @@ tracker:
 polling:
   interval_ms: 30000
 workspace:
-  root: ~/.local/share/cycle/workspaces
+  root: /home/symphony_workspaces/cycle
+hooks:
+  before_run: |
+    if ! command -v mise >/dev/null 2>&1; then
+      echo "mise is required to bootstrap the cupld toolchain" >&2
+      exit 1
+    fi
+    mise trust
+    mise install
+    mise exec -- cargo --version
+    mise exec -- rustc --version
+    mise exec -- rustfmt --version
+  after_create: |
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+      gh repo clone aeaston1/cupld . -- --depth 1
+    else
+      git clone --depth 1 https://github.com/aeaston1/cupld.git .
+    fi
+  before_remove: |
+    branch="$(git branch --show-current 2>/dev/null || true)"
+    if [ -z "$branch" ]; then
+      exit 0
+    fi
+    if ! command -v gh >/dev/null 2>&1; then
+      exit 0
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+      exit 0
+    fi
+    gh pr list --repo aeaston1/cupld --head "$branch" --state open --json number --jq '.[].number' |
+      while IFS= read -r pr_number; do
+        if [ -n "$pr_number" ]; then
+          gh pr close "$pr_number" --repo aeaston1/cupld --comment "Closing because the Linear issue for branch $branch entered a terminal state without merge."
+        fi
+      done
 agent:
   max_concurrent_agents: 5
-  max_turns: 12
+  max_concurrent_agents_by_state:
+    Merging: 1
+  max_turns: 10
 codex:
   command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=low --config 'service_tier="fast"' app-server
   approval_policy: never
-  thread_sandbox: workspace-write
+  thread_sandbox: danger-full-access
   turn_sandbox_policy:
-    type: workspaceWrite
+    type: dangerFullAccess
 review_judge:
   enabled: true
   source_state: Human Review
@@ -36,28 +71,11 @@ review_judge:
   model: gpt-5.5
   reasoning_effort: xhigh
   service_tier: fast
-  policy: standard
+  policy: very_lenient
   minimum_skip_confidence: medium
   hard_require_human_review:
-    paths:
-      - packaging/**
-      - Formula/**
-      - docs/release.md
-      - docs/service-model.md
-      - service/**
-      - services/**
-      - systemd/**
-      - launchd/**
-      - "*.service"
-      - "*.plist"
-      - install.sh
-      - scripts/install*
-    labels:
-      - security
-      - infrastructure
-      - release
-      - service
-      - homebrew
+    paths: []
+    labels: []
 cycle:
   engines:
     allow:
