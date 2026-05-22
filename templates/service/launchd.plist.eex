@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.cycle.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string><%= @executable_path %></string>
+    <string>start</string>
+    <string>--config</string>
+    <string><%= @config_path %></string>
+    <string>--state</string>
+    <string><%= @state_path %></string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CYCLE_ENV_FILE</key>
+    <string><%= @env_file_path %></string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string><%= @log_path %></string>
+  <key>StandardErrorPath</key>
+  <string><%= @log_path %></string>
+
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>
