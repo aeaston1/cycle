@@ -31,9 +31,10 @@ defmodule Cycle.StatusSnapshot do
     api_get = Keyword.get(opts, :api_get, &Req.get/2)
     health_opts = Keyword.get(opts, :health_opts, [])
 
-    projects = load_projects(config.projects["registry_path"])
-    engines = load_engines(config.engines["registry_path"])
-    runs = load_runs(Path.join(config.paths.state_dir, "runs.yaml"))
+    {projects, projects_registry} = load_projects(config.projects["registry_path"])
+    {engines, engines_registry} = load_engines(config.engines["registry_path"])
+    runs_path = Path.join(config.paths.state_dir, "runs.yaml")
+    {runs, runs_registry} = load_runs(runs_path)
 
     project_summary = project_summary(projects)
     drift = drift_summary(projects)
@@ -45,7 +46,12 @@ defmodule Cycle.StatusSnapshot do
         "state" => config.paths.state_dir,
         "projects_registry" => config.projects["registry_path"],
         "engines_registry" => config.engines["registry_path"],
-        "runs_registry" => Path.join(config.paths.state_dir, "runs.yaml")
+        "runs_registry" => runs_path
+      },
+      "registries" => %{
+        "projects" => projects_registry,
+        "engines" => engines_registry,
+        "runs" => runs_registry
       },
       "linear" => linear_status(config, env),
       "projects" => project_summary,
@@ -59,29 +65,51 @@ defmodule Cycle.StatusSnapshot do
   end
 
   defp load_projects(path) do
-    with {:ok, raw} <- Cycle.Registry.Store.read(path, %{}),
-         {:ok, registry} <- ProjectRegistry.from_map(Map.put_new(raw, "projects", [])) do
-      registry.projects
+    with {:ok, raw} <-
+           Cycle.Registry.Store.read(path, %{"schema_version" => 1, "projects" => []}),
+         {:ok, registry} <- ProjectRegistry.from_map(raw) do
+      {registry.projects, registry_status(path)}
     else
-      _ -> []
+      {:error, error} -> {[], registry_status(path, error)}
     end
   end
 
   defp load_engines(path) do
     with {:ok, registry} <- EngineRegistry.read(path) do
-      registry.engines
+      {registry.engines, registry_status(path)}
     else
-      _ -> []
+      {:error, error} -> {[], registry_status(path, error)}
     end
   end
 
   defp load_runs(path) do
     with {:ok, registry} <- RunStore.load(path) do
-      registry.runs
+      {registry.runs, registry_status(path)}
     else
-      _ -> []
+      {:error, error} -> {[], registry_status(path, error)}
     end
   end
+
+  defp registry_status(path), do: %{"path" => path, "state" => "ok", "error" => nil}
+
+  defp registry_status(path, error) do
+    %{"path" => path, "state" => "error", "error" => format_registry_error(error)}
+  end
+
+  defp format_registry_error({:invalid_yaml, _path, message}), do: "invalid YAML: #{message}"
+  defp format_registry_error({:read_failed, _path, reason}), do: "read failed: #{reason}"
+
+  defp format_registry_error(errors) when is_list(errors) do
+    errors
+    |> Enum.map(&format_schema_error/1)
+    |> Enum.join("; ")
+  end
+
+  defp format_registry_error(error), do: inspect(error)
+
+  defp format_schema_error(%{path: path, message: message}), do: "#{path} #{message}"
+  defp format_schema_error(%{path: path, reason: reason}), do: "#{path} #{reason}"
+  defp format_schema_error(error), do: inspect(error)
 
   defp linear_status(config, env) do
     configured? =

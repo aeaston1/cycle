@@ -401,9 +401,31 @@ defmodule Cycle.CLITest do
     end)
   end
 
+  test "status reports invalid registry errors" do
+    with_cycle_home(fn cycle_home ->
+      File.mkdir_p!(cycle_home)
+
+      File.write!(
+        Path.join(cycle_home, "projects.yaml"),
+        "schema_version: 1\nprojects:\n  - status: no-such-status\n"
+      )
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["status"]) == :ok
+        end)
+
+      assert output =~ "registry error: projects"
+      assert output =~ "$.projects[0].status"
+      assert output =~ "must be one of"
+    end)
+  end
+
   test "status supports json output" do
     output = capture_io(fn -> assert Cycle.CLI.run(["status", "--json"]) == :ok end)
-    assert Jason.decode!(output)["schema"] == "cycle.status_snapshot.v1"
+    decoded = Jason.decode!(output)
+    assert decoded["schema"] == "cycle.status_snapshot.v1"
+    assert Map.has_key?(decoded, "registries")
   end
 
   test "start validates required workflow option" do

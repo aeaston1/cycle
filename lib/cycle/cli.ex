@@ -364,6 +364,12 @@ defmodule Cycle.CLI do
       "  projects: #{project_counts["watched"] || 0} watched, #{project_counts["invalid"] || 0} invalid"
     )
 
+    Enum.each(snapshot["registries"], fn {name, registry} ->
+      if registry["state"] == "error" do
+        puts("  registry error: #{name} #{registry["path"]}: #{registry["error"]}")
+      end
+    end)
+
     run_counts = snapshot["runs"]["counts"]
 
     puts(
