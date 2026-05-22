@@ -405,6 +405,54 @@ defmodule Cycle.CLITest do
     assert Cycle.CLI.run(["start"]) == {:error, "cycle start requires --workflow PATH", 1}
   end
 
+  test "start dry-run renders exact managed engine command without executing it" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      install_path = fake_installed_engine(cycle_home)
+      workflow = Path.join(install_path, "elixir/WORKFLOW.md")
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["start", "--workflow", workflow, "--port", "4765", "--dry-run"]) ==
+                   :ok
+        end)
+
+      assert String.trim(output) ==
+               Enum.join(
+                 [Path.join(install_path, "elixir/bin/symphony"), "--port", "4765", workflow],
+                 " "
+               )
+    end)
+  end
+
+  test "start dry-run includes no-guardrails flag only with operator-approved config" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{
+                                                        cycle_home: cycle_home,
+                                                        config_home: config_home
+                                                      } ->
+      install_path = fake_installed_engine(cycle_home)
+      workflow = Path.join(install_path, "elixir/WORKFLOW.md")
+      config_dir = Path.join(config_home, "cycle")
+      File.mkdir_p!(config_dir)
+
+      File.write!(
+        Path.join(config_dir, "config.yaml"),
+        """
+        engines:
+          managed:
+            openai-symphony:
+              foreground_unattended: true
+        """
+      )
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["start", "--workflow", workflow, "--dry-run"]) == :ok
+        end)
+
+      assert output =~ "--i-understand-that-this-will-be-running-without-the-usual-guardrails"
+    end)
+  end
+
   test "service install placeholder remains explicit and service status reports safely" do
     install_output = capture_io(fn -> assert Cycle.CLI.run(["service", "install"]) == :ok end)
     status_output = capture_io(fn -> assert Cycle.CLI.run(["service", "status"]) == :ok end)
@@ -454,6 +502,7 @@ defmodule Cycle.CLITest do
       Path.join(System.tmp_dir!(), "cycle-symphony-fixture-#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(Path.join(root, "elixir/bin"))
+    File.write!(Path.join(root, "README.md"), "# Symphony fixture\n")
 
     if Keyword.get(opts, :include_workflow, true) do
       File.write!(Path.join(root, "elixir/WORKFLOW.md"), "# Workflow\n")
@@ -496,6 +545,16 @@ defmodule Cycle.CLITest do
       },
       overrides
     )
+  end
+
+  defp fake_installed_engine(cycle_home) do
+    install_path = Path.join([cycle_home, "engines", "openai-symphony", "main"])
+    File.mkdir_p!(Path.join(install_path, "elixir/bin"))
+    File.write!(Path.join(install_path, "elixir/WORKFLOW.md"), "# Workflow\n")
+    bin = Path.join(install_path, "elixir/bin/symphony")
+    File.write!(bin, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bin, 0o755)
+    install_path
   end
 
   defp git!(cwd, args) do

@@ -83,6 +83,7 @@ engines:
     openai-symphony:
       repo: https://github.com/openai/symphony.git
       default_ref: main
+      foreground_unattended: false
 
 scheduler:
   max_concurrent_runs: 10
@@ -127,8 +128,10 @@ service:
 ```
 
 The current scaffold writes a minimal `config.yaml` from
-`cycle linear configure`. Full schema validation and dispatch policy loading are
-planned behavior.
+`cycle linear configure`. `foreground_unattended` is intentionally false by
+default; when true for a managed Symphony engine, `cycle start` may include the
+upstream no-guardrails flag for foreground operator testing. Full dispatch
+policy loading is planned behavior.
 
 ## Legacy Config Compatibility
 

@@ -80,8 +80,16 @@ defmodule Cycle.EngineRegistry do
       install_path: install_path,
       capabilities: %{
         "adapter" => "symphony",
+        "adapter_contract" => "cycle.engine.adapter.v1",
         "workflow_schema" => "symphony.v1",
+        "run_mode" => "foreground_process",
+        "process_supervision" => true,
         "status_api" => false,
+        "dispatch" => %{
+          "single_issue" => false,
+          "unsupported_reason" => "upstream Symphony does not expose a stable single-run protocol"
+        },
+        "stop" => %{"foreground_process" => false},
         "runtime_commands" => ["git", "codex", "mise"],
         "policy" => %{"approval_policy" => true, "sandbox" => true}
       },

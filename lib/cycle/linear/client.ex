@@ -12,16 +12,39 @@ defmodule Cycle.Linear.Client do
   defmodule Project do
     @moduledoc "Linear project fields used by Cycle discovery."
     defstruct [:id, :name, :slug_id, :url, :description, :content]
+    @type t :: %__MODULE__{}
   end
 
   defmodule Issue do
     @moduledoc "Linear issue fields used by Cycle scheduling."
-    defstruct [:id, :identifier, :title, :url, :state, :project_id, :team_id]
+    defstruct [
+      :id,
+      :identifier,
+      :title,
+      :url,
+      :state,
+      :state_type,
+      :branch_name,
+      :assignee_id,
+      :assignee_name,
+      :assignee_email,
+      :labels,
+      :blocks,
+      :priority,
+      :priority_label,
+      :created_at,
+      :updated_at,
+      :project_id,
+      :team_id
+    ]
+
+    @type t :: %__MODULE__{}
   end
 
   defmodule Comment do
     @moduledoc "Linear issue comment fields used by Cycle workpads."
     defstruct [:id, :body, :url, :created_at, :updated_at, :user_name]
+    @type t :: %__MODULE__{}
   end
 
   defstruct endpoint: "https://api.linear.app/graphql",
@@ -299,10 +322,58 @@ defmodule Cycle.Linear.Client do
       title: issue["title"],
       url: issue["url"],
       state: get_in(issue, ["state", "name"]),
+      state_type: get_in(issue, ["state", "type"]),
+      branch_name: issue["branchName"],
+      assignee_id: get_in(issue, ["assignee", "id"]),
+      assignee_name: get_in(issue, ["assignee", "name"]),
+      assignee_email: get_in(issue, ["assignee", "email"]),
+      labels: issue |> get_in(["labels", "nodes"]) |> decode_label_names(),
+      blocks: issue |> get_in(["inverseRelations", "nodes"]) |> decode_blockers(),
+      priority: issue["priority"],
+      priority_label: issue["priorityLabel"],
+      created_at: issue["createdAt"],
+      updated_at: issue["updatedAt"],
       project_id: get_in(issue, ["project", "id"]),
       team_id: get_in(issue, ["team", "id"])
     }
   end
+
+  defp decode_label_names(nil), do: []
+
+  defp decode_label_names(labels) when is_list(labels) do
+    labels
+    |> Enum.map(& &1["name"])
+    |> Enum.filter(&present?/1)
+  end
+
+  defp decode_label_names(_labels), do: []
+
+  defp decode_blockers(nil), do: []
+
+  defp decode_blockers(relations) when is_list(relations) do
+    Enum.flat_map(relations, fn
+      %{"type" => relation_type, "issue" => blocker} when is_map(blocker) ->
+        if String.downcase(String.trim(relation_type || "")) == "blocks" do
+          [
+            %{
+              "id" => blocker["id"],
+              "identifier" => blocker["identifier"],
+              "title" => blocker["title"],
+              "url" => blocker["url"],
+              "state" => get_in(blocker, ["state", "name"]),
+              "state_type" => get_in(blocker, ["state", "type"])
+            }
+          ]
+        else
+          []
+        end
+
+      _relation ->
+        []
+    end)
+  end
+
+  defp decode_blockers(_blockers), do: []
 
   defp decode_comment(comment) do
     %Comment{
@@ -355,7 +426,26 @@ defmodule Cycle.Linear.Client do
           identifier
           title
           url
-          state { name }
+          branchName
+          priority
+          priorityLabel
+          createdAt
+          updatedAt
+          state { name type }
+          assignee { id name }
+          labels { nodes { name } }
+          inverseRelations(first: 50) {
+            nodes {
+              type
+              issue {
+                id
+                identifier
+                title
+                url
+                state { name type }
+              }
+            }
+          }
           project { id }
           team { id }
         }
@@ -376,7 +466,26 @@ defmodule Cycle.Linear.Client do
         identifier
         title
         url
-        state { name }
+        branchName
+        priority
+        priorityLabel
+        createdAt
+        updatedAt
+        state { name type }
+        assignee { id name }
+        labels { nodes { name } }
+        inverseRelations(first: 50) {
+          nodes {
+            type
+            issue {
+              id
+              identifier
+              title
+              url
+              state { name type }
+            }
+          }
+        }
         project { id }
         team { id }
       }
@@ -443,7 +552,26 @@ defmodule Cycle.Linear.Client do
           identifier
           title
           url
-          state { name }
+          branchName
+          priority
+          priorityLabel
+          createdAt
+          updatedAt
+          state { name type }
+          assignee { id name }
+          labels { nodes { name } }
+          inverseRelations(first: 50) {
+            nodes {
+              type
+              issue {
+                id
+                identifier
+                title
+                url
+                state { name type }
+              }
+            }
+          }
           project { id }
           team { id }
         }

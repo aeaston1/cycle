@@ -41,6 +41,8 @@ defmodule Cycle.ProjectRegistry do
               error: nil,
               policy_drift: %{},
               extra: %{}
+
+    @type t :: %__MODULE__{}
   end
 
   def validate(raw) do

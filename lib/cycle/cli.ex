@@ -459,43 +459,59 @@ defmodule Cycle.CLI do
           {:error, "cycle start requires --workflow PATH", 1}
 
         true ->
-          symphony_bin =
-            Path.join([
-              Cycle.EngineRegistry.install_path(config, engine_id),
-              "elixir",
-              "bin",
-              "symphony"
-            ])
+          engine = start_engine(config, engine_id)
 
-          command = [
-            symphony_bin,
-            "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
-            "--port",
-            opts.port,
-            opts.workflow
-          ]
-
-          cond do
-            !File.exists?(symphony_bin) ->
-              {:error,
-               "missing executable Symphony engine at #{symphony_bin}; run cycle symphony install first",
-               2}
-
-            !File.exists?(opts.workflow) ->
-              {:error, "workflow file not found: #{opts.workflow}", 1}
-
-            opts[:dry_run] ->
+          case Cycle.Engine.Symphony.start_foreground(engine,
+                 workflow: opts.workflow,
+                 port: opts.port,
+                 dry_run: opts[:dry_run],
+                 allow_foreground_unattended: foreground_unattended?(config, engine_id),
+                 env: start_env(config)
+               ) do
+            {:ok, command} ->
               puts(Enum.join(command, " "))
 
-            true ->
-              case System.cmd(symphony_bin, tl(command), into: IO.stream(:stdio, :line)) do
-                {_output, 0} -> :ok
-                {_output, _status} -> {:error, "Symphony engine exited unsuccessfully", 2}
-              end
+            :ok ->
+              :ok
+
+            {:error, %{"message" => message, "code" => code}} ->
+              {:error, message, error_code(code)}
           end
       end
     end
   end
+
+  defp start_engine(config, engine_id) do
+    registry_path = get_in(config.engines, ["registry_path"])
+    default = Cycle.EngineRegistry.default_record(config, engine_id)
+
+    case Cycle.EngineRegistry.read(registry_path) do
+      {:ok, registry} -> Cycle.EngineRegistry.find(registry, engine_id) || default
+      {:error, _reason} -> default
+    end
+  end
+
+  defp foreground_unattended?(config, engine_id) do
+    get_in(config.engines, ["managed", engine_id.name, "foreground_unattended"]) == true
+  end
+
+  defp start_env(config) do
+    case get_in(config.linear, ["api_key_env"]) do
+      env_name when is_binary(env_name) and env_name != "" ->
+        if present?(config.secrets["linear_api_key"]),
+          do: %{env_name => config.secrets["linear_api_key"]},
+          else: %{}
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp error_code("workflow_required"), do: 1
+  defp error_code("workflow_missing"), do: 1
+  defp error_code("engine_executable_missing"), do: 2
+  defp error_code("engine_exited"), do: 2
+  defp error_code(_code), do: 2
 
   defp service(["install"]), do: puts(service_install_text())
   defp service(["status" | rest]), do: service_status(rest)

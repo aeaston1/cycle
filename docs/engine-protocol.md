@@ -47,9 +47,17 @@ source_repo: https://github.com/openai/symphony.git
 ref: main
 install_path: ${CYCLE_HOME}/engines/openai-symphony/main
 capabilities:
+  adapter: symphony
+  adapter_contract: cycle.engine.adapter.v1
   workflow_schema: symphony.v1
-  run_mode: cli
-  status_api: true
+  run_mode: foreground_process
+  process_supervision: true
+  status_api: false
+  dispatch:
+    single_issue: false
+    unsupported_reason: upstream Symphony does not expose a stable single-run protocol
+  stop:
+    foreground_process: false
   supports_external_workspace: false
   supports_review_evidence: partial
 health:
@@ -170,6 +178,19 @@ the first version. The adapter may:
 - run Symphony with a workflow path
 - poll Symphony's status endpoint if available
 - read logs or status files produced by Symphony
+
+Current protocol gaps are explicit adapter capabilities:
+
+- `dispatch.single_issue: false`: Cycle may record a queued run, but it must not
+  create a running record or report dispatch success.
+- `status_api: false` unless a configured engine version advertises a stable
+  status URL.
+- foreground `stop` is process-owned; Cycle does not stop unrelated existing
+  Symphony services.
+
+Foreground commands include Symphony's required no-guardrails flag only when
+operator config explicitly enables unattended foreground operation for that
+managed engine.
 
 Cycle-specific state should remain outside the upstream Symphony checkout.
 
