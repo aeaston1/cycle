@@ -24,6 +24,7 @@ defmodule Cycle.StatusSnapshotTest do
                "linear",
                "paths",
                "projects",
+               "registries",
                "runs",
                "schema",
                "service"
@@ -31,6 +32,9 @@ defmodule Cycle.StatusSnapshotTest do
 
       assert snapshot["schema"] == "cycle.status_snapshot.v1"
       assert snapshot["linear"] == %{"auth" => "missing"}
+      assert snapshot["registries"]["projects"]["state"] == "ok"
+      assert snapshot["registries"]["engines"]["state"] == "ok"
+      assert snapshot["registries"]["runs"]["state"] == "ok"
       assert snapshot["projects"]["counts"]["watched"] == 0
       assert snapshot["projects"]["counts"]["invalid"] == 0
       assert snapshot["runs"]["counts"]["running"] == 0
@@ -91,6 +95,29 @@ defmodule Cycle.StatusSnapshotTest do
       refute encoded =~ "lin_secret_token"
       refute encoded =~ "full private log body"
       assert encoded =~ "validation failed"
+    end)
+  end
+
+  test "reports invalid registry errors without raising" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      File.mkdir_p!(cycle_home)
+
+      File.write!(
+        Path.join(cycle_home, "projects.yaml"),
+        "schema_version: 1\nprojects:\n  - status: definitely-not-valid\n"
+      )
+
+      assert {:ok, snapshot} =
+               StatusSnapshot.build(
+                 api_get: fn _url, _opts -> {:error, :closed} end,
+                 health_opts: [checked_at: @t0]
+               )
+
+      assert snapshot["projects"]["counts"]["watched"] == 0
+      assert snapshot["registries"]["projects"]["state"] == "error"
+      assert snapshot["registries"]["projects"]["path"] == Path.join(cycle_home, "projects.yaml")
+      assert snapshot["registries"]["projects"]["error"] =~ "status"
+      assert snapshot["registries"]["projects"]["error"] =~ "must be one of"
     end)
   end
 
