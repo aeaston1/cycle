@@ -9,6 +9,7 @@ defmodule Cycle.ProjectDiscovery do
   alias Cycle.ProjectRegistry
   alias Cycle.ProjectRegistry.Project
   alias Cycle.Registry.Store
+  alias Cycle.WorkflowPolicy
   alias Cycle.WorkflowResolver
 
   @default_page_size 100
@@ -59,12 +60,18 @@ defmodule Cycle.ProjectDiscovery do
     repo = %{"url" => metadata.repo_url, "full_name" => metadata.repo_full_name}
 
     case WorkflowResolver.resolve(repo, metadata.workflow_path, workflow_opts) do
-      {:ok, workflow} -> valid_record(project, metadata, workflow, now)
-      {:error, reason} -> invalid_record(project, metadata, reason, now)
+      {:ok, workflow} ->
+        case WorkflowPolicy.parse(workflow.content) do
+          {:ok, policy} -> valid_record(project, metadata, workflow, policy, now)
+          {:error, errors} -> invalid_record(project, metadata, errors, now)
+        end
+
+      {:error, reason} ->
+        invalid_record(project, metadata, reason, now)
     end
   end
 
-  defp valid_record(project, metadata, workflow, now) do
+  defp valid_record(project, metadata, workflow, policy, now) do
     %Project{
       linear_project: linear_project(project),
       namespace: metadata.source.namespace,
@@ -74,7 +81,9 @@ defmodule Cycle.ProjectDiscovery do
         "path" => workflow.path,
         "resolved_path" => workflow.resolved_path,
         "cache_path" => workflow.cache_path,
-        "hash" => workflow.hash
+        "hash" => workflow.hash,
+        "policy_hash" => policy.hash,
+        "policy" => policy_to_map(policy)
       },
       allowed_engines: metadata.allowed_engines,
       policy_profile: metadata.policy_profile || @default_policy_profile,
@@ -85,6 +94,10 @@ defmodule Cycle.ProjectDiscovery do
       error: nil,
       policy_drift: %{}
     }
+  end
+
+  defp invalid_record(project, metadata, errors, now) when is_list(errors) do
+    invalid_record(project, metadata, Enum.map(errors, &format_error/1) |> Enum.join("; "), now)
   end
 
   defp invalid_record(project, metadata, reason, now) do
@@ -129,6 +142,16 @@ defmodule Cycle.ProjectDiscovery do
       "name" => project.name,
       "slug" => project.slug_id,
       "url" => project.url
+    }
+  end
+
+  defp policy_to_map(%WorkflowPolicy{} = policy) do
+    %{
+      "agent" => policy.agent,
+      "tracker" => policy.tracker,
+      "review_judge" => policy.review_judge,
+      "worker" => policy.worker,
+      "hooks" => policy.hooks
     }
   end
 
