@@ -359,11 +359,11 @@ defmodule Cycle.CLITest do
   test "status is accepted without a running Symphony service" do
     output =
       capture_io(fn ->
-        assert Cycle.CLI.run(["status", "--state-url", "http://127.0.0.1:9"]) == :ok
+        assert Cycle.CLI.run(["status"]) == :ok
       end)
 
     assert output =~ "Cycle status"
-    assert output =~ "symphony:"
+    assert output =~ "api:"
   end
 
   test "status summarizes persisted policy drift" do
@@ -394,11 +394,16 @@ defmodule Cycle.CLITest do
 
       output =
         capture_io(fn ->
-          assert Cycle.CLI.run(["status", "--state-url", "http://127.0.0.1:9"]) == :ok
+          assert Cycle.CLI.run(["status"]) == :ok
         end)
 
       assert output =~ "policy drift: 1 records across 1 projects"
     end)
+  end
+
+  test "status supports json output" do
+    output = capture_io(fn -> assert Cycle.CLI.run(["status", "--json"]) == :ok end)
+    assert Jason.decode!(output)["schema"] == "cycle.status_snapshot.v1"
   end
 
   test "start validates required workflow option" do
