@@ -32,6 +32,8 @@ cycle status
 - `cycle symphony path`
 - `cycle project opt-in --repo <git-repository-url>`
 - `cycle project discover [--limit N] [--raw]`
+- `cycle policy drift [--json]`
+- `cycle policy propagate --project PROJECT --dry-run`
 - `cycle start`
 - `cycle status`
 - `cycle service install`
