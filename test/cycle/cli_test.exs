@@ -366,6 +366,41 @@ defmodule Cycle.CLITest do
     assert output =~ "symphony:"
   end
 
+  test "status summarizes persisted policy drift" do
+    with_cycle_home(fn cycle_home ->
+      registry_path = Path.join(cycle_home, "projects.yaml")
+
+      assert :ok =
+               Cycle.Registry.Store.write(registry_path, %{
+                 "schema_version" => 1,
+                 "projects" => [
+                   project_record(%{
+                     "status" => "drift",
+                     "policy_drift" => %{
+                       "status" => "drift",
+                       "records" => [
+                         %{
+                           "path" => "review_judge.model",
+                           "desired" => "gpt-5.5",
+                           "observed" => "gpt-4.1",
+                           "severity" => "info",
+                           "propagation_available" => true
+                         }
+                       ]
+                     }
+                   })
+                 ]
+               })
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["status", "--state-url", "http://127.0.0.1:9"]) == :ok
+        end)
+
+      assert output =~ "policy drift: 1 records across 1 projects"
+    end)
+  end
+
   test "start validates required workflow option" do
     assert Cycle.CLI.run(["start"]) == {:error, "cycle start requires --workflow PATH", 1}
   end
@@ -486,6 +521,30 @@ defmodule Cycle.CLITest do
     git!(root, ["commit", "-m", "fixture"])
 
     root
+  end
+
+  defp project_record(overrides) do
+    Map.merge(
+      %{
+        "linear_project" => %{
+          "id" => "project-id",
+          "name" => "Project",
+          "slug" => "project",
+          "url" => "https://linear.app/example/project/project-id"
+        },
+        "namespace" => "cycle",
+        "repo" => %{"url" => "https://github.com/OWNER/REPO.git", "full_name" => "OWNER/REPO"},
+        "workflow" => %{"path" => "WORKFLOW.md", "resolved_path" => "/tmp/cycle/WORKFLOW.md"},
+        "allowed_engines" => ["openai-symphony@main"],
+        "policy_profile" => "default",
+        "capacity" => %{},
+        "last_discovery_at" => "2026-05-22T12:00:00Z",
+        "status" => "valid",
+        "error" => nil,
+        "policy_drift" => %{"status" => "valid", "records" => []}
+      },
+      overrides
+    )
   end
 
   defp fake_installed_engine(cycle_home) do

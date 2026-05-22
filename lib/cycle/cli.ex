@@ -278,12 +278,14 @@ defmodule Cycle.CLI do
            parse_options(args, %{limit: "50"}, %{"--limit" => :limit, "--raw" => :raw}),
          :ok <- validate_limit(opts.limit),
          {:ok, config} <- load_config(),
-         :ok <- require_configured_linear_key(config) do
+         :ok <- require_configured_linear_key(config),
+         {:ok, global_policy} <- Cycle.GlobalPolicy.from_config(config) do
       client = Cycle.Linear.Client.new(config)
 
       case Cycle.ProjectDiscovery.discover(client,
              limit: String.to_integer(opts.limit),
              registry_path: config.projects["registry_path"],
+             global_policy: global_policy,
              workflow_resolver: [
                cache_root: config.projects["workflow_cache_path"],
                local_checkout_roots: [File.cwd!()]
@@ -349,10 +351,41 @@ defmodule Cycle.CLI do
         do: puts("  linear: configured"),
         else: puts("  linear: missing LINEAR_API_KEY")
 
+      print_policy_drift_summary(config.projects["registry_path"])
+
       case System.find_executable("curl") do
         nil -> puts("  symphony: curl unavailable; skipping status API check")
         _ -> status_api(opts.state_url)
       end
+    end
+  end
+
+  defp print_policy_drift_summary(registry_path) do
+    case Cycle.Registry.Store.read(registry_path, %{}) do
+      {:ok, raw} ->
+        summarize_policy_drift(raw)
+
+      {:error, _reason} ->
+        puts("  policy drift: unavailable")
+    end
+  end
+
+  defp summarize_policy_drift(raw) do
+    raw = Map.put_new(raw, "projects", [])
+
+    case Cycle.ProjectRegistry.from_map(raw) do
+      {:ok, registry} ->
+        drift_count =
+          registry.projects
+          |> Enum.flat_map(&(get_in(&1.policy_drift || %{}, ["records"]) || []))
+          |> length()
+
+        drifted_projects = Enum.count(registry.projects, &(&1.status == "drift"))
+
+        puts("  policy drift: #{drift_count} records across #{drifted_projects} projects")
+
+      {:error, _errors} ->
+        puts("  policy drift: unavailable")
     end
   end
 

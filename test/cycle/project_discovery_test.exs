@@ -134,6 +134,68 @@ defmodule Cycle.ProjectDiscoveryTest do
            ] = result.records
   end
 
+  test "policy drift is persisted in project registry" do
+    now = ~U[2026-05-22 12:00:00Z]
+    name = unique_stub()
+
+    stub_projects(name, [
+      linear_project(%{
+        "id" => "drift-id",
+        "description" => """
+        cycle:
+          enabled: true
+          repo: https://github.com/OWNER/REPO.git
+        """
+      })
+    ])
+
+    root = temp_root()
+    checkout_path = Path.join(root, "checkout")
+    write_workflow!(checkout_path, "WORKFLOW.md")
+
+    assert {:ok, global_policy} =
+             Cycle.GlobalPolicy.from_config(%{
+               "policy" => %{
+                 "enforcement" => "block",
+                 "required" => %{"capacity" => %{"max_concurrent_agents" => 4}}
+               }
+             })
+
+    registry_path = Path.join(root, "projects.yaml")
+
+    assert {:ok, result} =
+             ProjectDiscovery.discover(client(name),
+               registry_path: registry_path,
+               global_policy: global_policy,
+               workflow_resolver: [
+                 cache_root: Path.join(root, "workflow-cache"),
+                 local_checkout_paths: [checkout_path]
+               ],
+               now: now
+             )
+
+    assert [
+             %ProjectRegistry.Project{
+               status: "drift",
+               policy_drift: %{
+                 "status" => "drift",
+                 "records" => [
+                   %{
+                     "path" => "agent.max_concurrent_agents",
+                     "desired" => 4,
+                     "observed" => 2,
+                     "severity" => "blocking",
+                     "propagation_available" => true
+                   }
+                 ]
+               }
+             }
+           ] = result.records
+
+    assert {:ok, raw} = Store.read(registry_path, %{})
+    assert [%{"status" => "drift", "policy_drift" => %{"records" => [_]}}] = raw["projects"]
+  end
+
   test "registry write errors are discovery-wide failures" do
     name = unique_stub()
 

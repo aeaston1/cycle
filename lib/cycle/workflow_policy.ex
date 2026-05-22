@@ -8,6 +8,8 @@ defmodule Cycle.WorkflowPolicy do
   defstruct [
     :hash,
     agent: %{},
+    codex: %{},
+    engine: %{},
     tracker: %{},
     review_judge: %{},
     worker: %{},
@@ -17,6 +19,8 @@ defmodule Cycle.WorkflowPolicy do
   @type t :: %__MODULE__{
           hash: String.t(),
           agent: map(),
+          codex: map(),
+          engine: map(),
           tracker: map(),
           review_judge: map(),
           worker: map(),
@@ -74,6 +78,8 @@ defmodule Cycle.WorkflowPolicy do
        %__MODULE__{
          hash: hash(yaml),
          agent: extract_agent(data),
+         codex: extract_map(data, "codex"),
+         engine: extract_map(data, "engine"),
          tracker: extract_tracker(data),
          review_judge: extract_review_judge(data),
          worker: extract_worker(data),
@@ -193,6 +199,13 @@ defmodule Cycle.WorkflowPolicy do
     end
   end
 
+  defp extract_map(data, key) do
+    case Map.get(data, key) do
+      value when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
   defp maybe_put_capacity(result, %{"max_concurrent_agents_by_state" => capacity})
        when is_map(capacity) do
     Map.put(
@@ -225,6 +238,9 @@ defmodule Cycle.WorkflowPolicy do
           "review_state",
           "proceed_state",
           "policy",
+          "model",
+          "reasoning_effort",
+          "service_tier",
           "minimum_skip_confidence",
           "hard_require_human_review"
         ])
