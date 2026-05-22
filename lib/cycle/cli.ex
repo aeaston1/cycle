@@ -21,7 +21,7 @@ defmodule Cycle.CLI do
     cycle symphony path [--version REF]
     cycle project opt-in --repo URL
     cycle project discover [--limit N] [--raw]
-    cycle service install
+    cycle service install [--dry-run] [--yes]
     cycle service status [--json]
 
   Environment:
@@ -441,21 +441,34 @@ defmodule Cycle.CLI do
   defp reconciler_error({:decode, message}), do: "Linear API response decode failed: #{message}"
   defp reconciler_error(reason), do: inspect(reason)
 
-  defp service(["install"]), do: puts(service_install_text())
+  defp service(["install" | rest]), do: service_install(rest)
   defp service(["status" | rest]), do: service_status(rest)
   defp service([]), do: {:error, "missing service subcommand", 1}
   defp service([sub | _]), do: {:error, "unknown service subcommand: #{sub}", 1}
 
-  defp service_install_text do
-    """
-    Service installation is not implemented yet.
+  defp service_install(args) do
+    with {:ok, opts} <- parse_options(args, %{}, %{"--dry-run" => :dry_run, "--yes" => :yes}),
+         {:ok, result} <- Cycle.Service.Install.install(dry_run: opts[:dry_run], yes: opts[:yes]) do
+      print_service_install(result)
+    end
+  end
 
-    Planned backing behavior:
-      - generate a launchd plist on macOS
-      - generate a systemd unit on Linux
-      - point the service at a Cycle-managed Symphony engine
-      - require explicit operator confirmation before replacing an existing service
-    """
+  defp print_service_install(result) do
+    puts("Cycle service install")
+    puts("  manager: #{result.platform}")
+    puts("  service file: #{result.service_path}")
+    puts("  env file: #{result.env_file_path}")
+
+    if result.dry_run do
+      puts("")
+      puts(result.rendered_service)
+      puts("Planned service-manager commands:")
+      Enum.each(result.commands, &puts("  #{Enum.join(&1, " ")}"))
+    else
+      puts("  enabled: true")
+    end
+
+    :ok
   end
 
   defp service_status(args) do
@@ -494,7 +507,8 @@ defmodule Cycle.CLI do
 
   defp parse_options([arg | rest], opts, spec) do
     case Map.fetch(spec, arg) do
-      {:ok, key} when key in [:from_env, :print, :raw, :dry_run, :no_dispatch, :once, :json] ->
+      {:ok, key}
+      when key in [:from_env, :print, :raw, :dry_run, :no_dispatch, :once, :json, :yes] ->
         parse_options(rest, Map.put(opts, key, true), spec)
 
       {:ok, key} ->

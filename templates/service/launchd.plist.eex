@@ -10,14 +10,14 @@
   <array>
     <string><%= @executable_path %></string>
     <string>start</string>
-    <string>--config</string>
-    <string><%= @config_path %></string>
-    <string>--state</string>
-    <string><%= @state_path %></string>
   </array>
 
   <key>EnvironmentVariables</key>
   <dict>
+    <key>XDG_CONFIG_HOME</key>
+    <string><%= Path.dirname(@config_path) |> Path.dirname() %></string>
+    <key>CYCLE_HOME</key>
+    <string><%= @state_path %></string>
     <key>CYCLE_ENV_FILE</key>
     <string><%= @env_file_path %></string>
   </dict>
