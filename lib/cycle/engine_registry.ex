@@ -19,7 +19,7 @@ defmodule Cycle.EngineRegistry do
     "capacity"
   ]
   @known_lock_keys ["name", "ref", "resolved_revision", "installed_at"]
-  @health_states ["unknown", "healthy", "unhealthy", "missing"]
+  @health_states ["unknown", "healthy", "unhealthy", "missing", "invalid"]
 
   defstruct schema_version: Schema.schema_version(), engines: [], extra: %{}
 
@@ -78,7 +78,13 @@ defmodule Cycle.EngineRegistry do
       source: managed["repo"],
       ref: engine_id.ref,
       install_path: install_path,
-      capabilities: %{"adapter" => "symphony"},
+      capabilities: %{
+        "adapter" => "symphony",
+        "workflow_schema" => "symphony.v1",
+        "status_api" => false,
+        "runtime_commands" => ["git", "codex", "mise"],
+        "policy" => %{"approval_policy" => true, "sandbox" => true}
+      },
       health: %{"state" => health_state(install_path)},
       capacity: %{"max_concurrent_runs" => get_in(config.scheduler, ["max_concurrent_runs"])}
     }

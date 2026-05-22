@@ -205,8 +205,12 @@ defmodule Cycle.Service.Status do
     case Cycle.EngineId.parse(default) do
       {:ok, engine_id} ->
         path = Cycle.EngineRegistry.install_path(config, engine_id)
-        state = if File.dir?(Path.join(path, ".git")), do: "installed", else: "missing"
-        %{"default" => default, "path" => path, "state" => state}
+        engine = Cycle.EngineRegistry.default_record(config, engine_id)
+        health = Cycle.Engine.Health.check(%{engine | install_path: path})
+
+        health
+        |> Map.take(["checked_at", "reason", "revision", "executable"])
+        |> Map.merge(%{"default" => default, "path" => path, "state" => health["state"]})
 
       {:error, reason} ->
         %{"default" => default, "path" => nil, "state" => "unknown", "error" => reason}
