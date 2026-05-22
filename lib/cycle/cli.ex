@@ -335,14 +335,15 @@ defmodule Cycle.CLI do
            parse_options(args, %{state_url: @default_state_url}, %{"--state-url" => :state_url}),
          {:ok, config} <- Cycle.Config.load(),
          {:ok, engine_id} <- default_engine_id(config) do
-      default_engine = Cycle.EngineRegistry.install_path(config, engine_id)
+      engine = status_engine(config, engine_id)
       puts("Cycle status")
       puts("  config: #{config_home()}")
       puts("  state:  #{cycle_home()}")
+      puts("  engine: #{engine.health["state"]} at #{engine.install_path}")
 
-      if File.dir?(Path.join(default_engine, ".git")),
-        do: puts("  engine: installed at #{default_engine}"),
-        else: puts("  engine: missing at #{default_engine}")
+      if engine.health["reason"] do
+        puts("  engine reason: #{engine.health["reason"]}")
+      end
 
       if present?(linear_api_key()),
         do: puts("  linear: configured"),
@@ -378,6 +379,33 @@ defmodule Cycle.CLI do
 
   defp print_status_payload(_payload, state_url),
     do: puts("  symphony: reachable at #{state_url}")
+
+  defp status_engine(config, engine_id) do
+    registry_path = get_in(config.engines, ["registry_path"])
+    default = Cycle.EngineRegistry.default_record(config, engine_id)
+
+    engine =
+      case Cycle.EngineRegistry.read(registry_path) do
+        {:ok, registry} ->
+          registry
+          |> Cycle.Engine.Health.refresh_registry()
+          |> persist_refreshed_registry(registry_path)
+          |> Cycle.EngineRegistry.find(engine_id)
+          |> Kernel.||(default)
+
+        {:error, _error} ->
+          default
+      end
+
+    %{engine | health: Cycle.Engine.Health.check(engine)}
+  end
+
+  defp persist_refreshed_registry(registry, registry_path) do
+    case Cycle.EngineRegistry.write(registry_path, registry) do
+      :ok -> registry
+      {:error, _reason} -> registry
+    end
+  end
 
   defp countish(value) when is_list(value), do: length(value)
   defp countish(value), do: value
@@ -684,6 +712,8 @@ defmodule Cycle.CLI do
     with {:ok, registry} <- Cycle.EngineRegistry.read(registry_path),
          {:ok, lock_registry} <- Cycle.EngineRegistry.read_lock(lock_path),
          {:ok, revision} <- resolved_revision(target),
+         checked_engine = Cycle.EngineRegistry.default_record(config, engine_id),
+         health = Cycle.Engine.Health.check(%{checked_engine | install_path: target}),
          :ok <-
            Cycle.EngineRegistry.write(
              registry_path,
@@ -691,7 +721,8 @@ defmodule Cycle.CLI do
                registry,
                %{
                  Cycle.EngineRegistry.default_record(config, engine_id)
-                 | health: %{"state" => "healthy"}
+                 | install_path: target,
+                   health: health
                }
              )
            ),
