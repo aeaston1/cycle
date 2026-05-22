@@ -134,6 +134,10 @@ Reports:
 
 The current adapted Symphony status dashboard already proves per-project usage and workflow-error visibility. Cycle should make that the fleet status surface across projects and engines.
 
+V1 remains CLI plus localhost API rather than a web dashboard. The future
+dashboard and versioned multi-engine protocol plan is tracked in
+[future-roadmap.md](future-roadmap.md).
+
 ## CLI Direction
 
 Cycle includes the intended operator command surface now:
@@ -210,6 +214,8 @@ The practical migration path is:
 - `porting-map.md`: implementation map from adapted Symphony files to Cycle modules.
 - `config.md`: Cycle config files, environment, registries, and precedence.
 - `engine-protocol.md`: contract between Cycle and managed Symphony engines.
+- [future-roadmap.md](future-roadmap.md): future dashboard and explicit engine
+  protocol roadmap.
 - `metadata-spec.md`: Linear project metadata schema.
 - `workflow-contract.md`: repo-owned workflow boundary.
 - `scheduler-design.md`: scheduler and dispatch rules.
