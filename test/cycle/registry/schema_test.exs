@@ -33,7 +33,7 @@ defmodule Cycle.Registry.SchemaTest do
 
     assert {:ok, registry} = EngineRegistry.from_map(raw)
     assert [engine] = registry.engines
-    assert engine.id == "symphony"
+    assert engine.id == "openai-symphony@main"
     assert engine.capabilities["states"] == ["Todo", "In Progress"]
 
     assert EngineRegistry.to_map(registry) == raw
@@ -57,6 +57,55 @@ defmodule Cycle.Registry.SchemaTest do
     assert lock.resolved_revision == "abc123"
 
     assert EngineRegistry.lock_to_map(registry) == raw
+  end
+
+  test "engine registry and lock persist as separate files" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-engine-registry-test-#{System.unique_integer([:positive])}"
+      )
+
+    registry_path = Path.join(root, "engines.yaml")
+    lock_path = Path.join(root, "engines.lock.yaml")
+
+    registry = %EngineRegistry{engines: [struct(EngineRegistry.Engine, atomize(engine_record()))]}
+
+    lock_registry = %EngineRegistry.LockRegistry{
+      locks: [
+        %EngineRegistry.Lock{
+          name: "openai-symphony",
+          ref: "main",
+          resolved_revision: "abc123",
+          installed_at: "2026-05-22T12:00:00Z"
+        }
+      ]
+    }
+
+    try do
+      assert :ok = EngineRegistry.write(registry_path, registry)
+      assert :ok = EngineRegistry.write_lock(lock_path, lock_registry)
+
+      assert {:ok, read_registry} = EngineRegistry.read(registry_path)
+      assert {:ok, read_locks} = EngineRegistry.read_lock(lock_path)
+
+      assert hd(read_registry.engines).install_path == "/tmp/cycle/engines/openai-symphony/main"
+      assert hd(read_locks.locks).resolved_revision == "abc123"
+    after
+      File.rm_rf(root)
+    end
+  end
+
+  test "engine registry rejects credentialed source urls" do
+    raw = %{
+      "schema_version" => 1,
+      "engines" => [
+        %{engine_record() | "source" => "https://token@github.com/OWNER/REPO.git"}
+      ]
+    }
+
+    assert {:error, errors} = EngineRegistry.validate(raw)
+    assert %{path: "$.engines[0].source", reason: "must not contain credentials"} in errors
   end
 
   test "run registry schema validates and round trips" do
@@ -155,11 +204,11 @@ defmodule Cycle.Registry.SchemaTest do
 
   defp engine_record do
     %{
-      "id" => "symphony",
-      "name" => "Symphony",
+      "id" => "openai-symphony@main",
+      "name" => "openai-symphony",
       "source" => "https://github.com/OWNER/symphony.git",
       "ref" => "main",
-      "install_path" => "/tmp/cycle/engines/symphony",
+      "install_path" => "/tmp/cycle/engines/openai-symphony/main",
       "capabilities" => %{
         "states" => ["Todo", "In Progress"],
         "extensions" => %{"custom_flag" => true}
@@ -190,4 +239,6 @@ defmodule Cycle.Registry.SchemaTest do
       ]
     }
   end
+
+  defp atomize(map), do: Map.new(map, fn {key, value} -> {String.to_atom(key), value} end)
 end

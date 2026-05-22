@@ -154,7 +154,7 @@ defmodule Cycle.Config do
       },
       "engines" => %{
         "registry_path" => "${CYCLE_HOME}/engines.yaml",
-        "lock_path" => "${CYCLE_HOME}/engines.lock",
+        "lock_path" => "${CYCLE_HOME}/engines.lock.yaml",
         "default" => "openai-symphony@main",
         "install_root" => "${CYCLE_HOME}/engines",
         "managed" => %{

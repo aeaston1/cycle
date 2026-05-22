@@ -174,8 +174,10 @@ defmodule Cycle.CLI do
              "--version" => :ref,
              "--ref" => :ref
            }),
+         {:ok, config} <- Cycle.Config.load(cli: engine_cli(opts.repo, opts.ref)),
+         {:ok, engine_id} <- engine_id_for(config, opts.ref),
          :ok <- require_command("git") do
-      target = engine_dir(opts.ref)
+      target = Cycle.EngineRegistry.install_path(config, engine_id)
       File.mkdir_p!(Path.dirname(target))
 
       cond do
@@ -190,7 +192,7 @@ defmodule Cycle.CLI do
                 stderr_to_stdout: true
               )
 
-            verify_symphony_checkout(target)
+            verify_symphony_checkout(config, engine_id, target)
           end
 
         File.exists?(target) ->
@@ -201,16 +203,18 @@ defmodule Cycle.CLI do
 
           with :ok <- cmd("git", ["clone", opts.repo, target], 2),
                :ok <- cmd("git", ["-C", target, "checkout", opts.ref], 2) do
-            verify_symphony_checkout(target)
+            verify_symphony_checkout(config, engine_id, target)
           end
       end
     end
   end
 
-  defp verify_symphony_checkout(target) do
+  defp verify_symphony_checkout(config, engine_id, target) do
     if File.exists?(Path.join(target, "elixir/WORKFLOW.md")) do
-      puts("Symphony installed at: #{target}")
-      :ok
+      with :ok <- record_engine_install(config, engine_id, target) do
+        puts("Symphony installed at: #{target}")
+        :ok
+      end
     else
       {:error, "installed Symphony checkout did not contain elixir/WORKFLOW.md", 3}
     end
@@ -221,8 +225,22 @@ defmodule Cycle.CLI do
            parse_options(args, %{ref: @default_symphony_ref}, %{
              "--version" => :ref,
              "--ref" => :ref
-           }) do
-      puts(engine_dir(opts.ref))
+           }),
+         {:ok, config} <- Cycle.Config.load(),
+         {:ok, engine_id} <- engine_id_for(config, opts.ref) do
+      registry_path = get_in(config.engines, ["registry_path"])
+
+      engine =
+        case Cycle.EngineRegistry.read(registry_path) do
+          {:ok, registry} ->
+            Cycle.EngineRegistry.find(registry, engine_id) ||
+              Cycle.EngineRegistry.default_record(config, engine_id)
+
+          {:error, _error} ->
+            Cycle.EngineRegistry.default_record(config, engine_id)
+        end
+
+      puts(engine.install_path)
     end
   end
 
@@ -313,8 +331,10 @@ defmodule Cycle.CLI do
 
   defp status(args) do
     with {:ok, opts} <-
-           parse_options(args, %{state_url: @default_state_url}, %{"--state-url" => :state_url}) do
-      default_engine = engine_dir(@default_symphony_ref)
+           parse_options(args, %{state_url: @default_state_url}, %{"--state-url" => :state_url}),
+         {:ok, config} <- Cycle.Config.load(),
+         {:ok, engine_id} <- default_engine_id(config) do
+      default_engine = Cycle.EngineRegistry.install_path(config, engine_id)
       puts("Cycle status")
       puts("  config: #{config_home()}")
       puts("  state:  #{cycle_home()}")
@@ -369,13 +389,21 @@ defmodule Cycle.CLI do
              "--version" => :ref,
              "--ref" => :ref,
              "--dry-run" => :dry_run
-           }) do
+           }),
+         {:ok, config} <- Cycle.Config.load(),
+         {:ok, engine_id} <- engine_id_for(config, opts.ref) do
       cond do
         !present?(opts[:workflow]) ->
           {:error, "cycle start requires --workflow PATH", 1}
 
         true ->
-          symphony_bin = Path.join([engine_dir(opts.ref), "elixir", "bin", "symphony"])
+          symphony_bin =
+            Path.join([
+              Cycle.EngineRegistry.install_path(config, engine_id),
+              "elixir",
+              "bin",
+              "symphony"
+            ])
 
           command = [
             symphony_bin,
@@ -518,7 +546,92 @@ defmodule Cycle.CLI do
 
   defp config_file, do: Path.join(config_home(), "config.yaml")
   defp legacy_config_file, do: Path.join(config_home(), "config.env")
-  defp engine_dir(ref), do: Path.join([cycle_home(), "engines/openai-symphony", ref])
+
+  defp engine_cli(repo, ref) do
+    %{
+      "engines" => %{"managed" => %{"openai-symphony" => %{"repo" => repo, "default_ref" => ref}}}
+    }
+  end
+
+  defp default_engine_id(config) do
+    config.engines
+    |> Map.get("default", "openai-symphony@main")
+    |> Cycle.EngineId.parse()
+    |> only_supported_engine()
+  end
+
+  defp engine_id_for(config, ref) do
+    with {:ok, default} <- default_engine_id(config) do
+      Cycle.EngineId.format(default.name, ref)
+      |> Cycle.EngineId.parse()
+      |> only_supported_engine()
+    end
+  end
+
+  defp only_supported_engine({:ok, %{name: "openai-symphony"} = engine_id}), do: {:ok, engine_id}
+
+  defp only_supported_engine({:ok, engine_id}),
+    do: {:error, "unsupported engine: #{engine_id.name}", 1}
+
+  defp only_supported_engine({:error, reason}), do: {:error, reason, 1}
+
+  defp record_engine_install(config, engine_id, target) do
+    registry_path = get_in(config.engines, ["registry_path"])
+    lock_path = get_in(config.engines, ["lock_path"])
+
+    with {:ok, registry} <- Cycle.EngineRegistry.read(registry_path),
+         {:ok, lock_registry} <- Cycle.EngineRegistry.read_lock(lock_path),
+         {:ok, revision} <- resolved_revision(target),
+         :ok <-
+           Cycle.EngineRegistry.write(
+             registry_path,
+             Cycle.EngineRegistry.upsert(
+               registry,
+               %{
+                 Cycle.EngineRegistry.default_record(config, engine_id)
+                 | health: %{"state" => "healthy"}
+               }
+             )
+           ),
+         :ok <-
+           Cycle.EngineRegistry.write_lock(
+             lock_path,
+             Cycle.EngineRegistry.upsert_lock(lock_registry, %Cycle.EngineRegistry.Lock{
+               name: engine_id.name,
+               ref: engine_id.ref,
+               resolved_revision: revision,
+               installed_at:
+                 DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+             })
+           ) do
+      :ok
+    else
+      {:error, {:invalid_yaml, path, reason}} ->
+        {:error, "invalid registry YAML at #{path}: #{reason}", 3}
+
+      {:error, {:read_failed, path, reason}} ->
+        {:error, "could not read registry #{path}: #{reason}", 3}
+
+      {:error, {:encode_failed, reason}} ->
+        {:error, "could not encode engine registry: #{reason}", 3}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason, 3}
+
+      {:error, errors} when is_list(errors) ->
+        {:error, "invalid engine registry: #{inspect(errors)}", 3}
+
+      other ->
+        other
+    end
+  end
+
+  defp resolved_revision(target) do
+    case System.cmd("git", ["-C", target, "rev-parse", "HEAD"], stderr_to_stdout: true) do
+      {revision, 0} -> {:ok, String.trim(revision)}
+      {_output, _status} -> {:error, "could not resolve installed engine revision"}
+    end
+  end
 
   defp linear_api_key do
     System.get_env("LINEAR_API_KEY") || config_linear_api_key_env() ||
