@@ -71,12 +71,45 @@ defmodule Cycle.CLITest do
   end
 
   test "symphony path prints the managed engine path" do
-    output =
-      capture_io(fn ->
-        assert Cycle.CLI.run(["symphony", "path", "--version", "test-ref"]) == :ok
-      end)
+    with_cycle_home(fn cycle_home ->
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["symphony", "path", "--version", "test-ref"]) == :ok
+        end)
 
-    assert output =~ "/engines/openai-symphony/test-ref"
+      assert String.trim(output) ==
+               Path.join([cycle_home, "engines", "openai-symphony", "test-ref"])
+    end)
+  end
+
+  test "symphony path prefers registry install path" do
+    with_cycle_home(fn cycle_home ->
+      registry_path = Path.join(cycle_home, "engines.yaml")
+      install_path = Path.join(cycle_home, "custom-engines/openai-symphony/main")
+
+      File.mkdir_p!(cycle_home)
+
+      :ok =
+        Cycle.EngineRegistry.write(registry_path, %Cycle.EngineRegistry{
+          engines: [
+            %Cycle.EngineRegistry.Engine{
+              id: "openai-symphony@main",
+              name: "openai-symphony",
+              source: "https://github.com/OWNER/REPO.git",
+              ref: "main",
+              install_path: install_path,
+              health: %{"state" => "missing"}
+            }
+          ]
+        })
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["symphony", "path"]) == :ok
+        end)
+
+      assert String.trim(output) == install_path
+    end)
   end
 
   test "project opt-in prints cycle metadata" do
@@ -137,4 +170,20 @@ defmodule Cycle.CLITest do
 
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
+
+  defp with_cycle_home(fun) do
+    cycle_home =
+      Path.join(System.tmp_dir!(), "cycle-cli-home-#{System.unique_integer([:positive])}")
+
+    previous_cycle_home = System.get_env("CYCLE_HOME")
+
+    System.put_env("CYCLE_HOME", cycle_home)
+
+    try do
+      fun.(cycle_home)
+    after
+      restore_env("CYCLE_HOME", previous_cycle_home)
+      File.rm_rf(cycle_home)
+    end
+  end
 end

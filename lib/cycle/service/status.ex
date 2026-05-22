@@ -201,10 +201,16 @@ defmodule Cycle.Service.Status do
 
   defp engine_health(%Config{} = config, _state_path) do
     default = get_in(config.engines, ["default"]) || "openai-symphony@main"
-    [name, ref] = String.split(default, "@", parts: 2)
-    path = Path.join([config.paths.engines_dir, name, ref])
-    state = if File.dir?(Path.join(path, ".git")), do: "installed", else: "missing"
-    %{"default" => default, "path" => path, "state" => state}
+
+    case Cycle.EngineId.parse(default) do
+      {:ok, engine_id} ->
+        path = Cycle.EngineRegistry.install_path(config, engine_id)
+        state = if File.dir?(Path.join(path, ".git")), do: "installed", else: "missing"
+        %{"default" => default, "path" => path, "state" => state}
+
+      {:error, reason} ->
+        %{"default" => default, "path" => nil, "state" => "unknown", "error" => reason}
+    end
   end
 
   defp engine_health(_config_error, state_path) do

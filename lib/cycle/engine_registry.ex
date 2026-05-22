@@ -4,6 +4,7 @@ defmodule Cycle.EngineRegistry do
   """
 
   alias Cycle.Registry.Schema
+  alias Cycle.Registry.Store
 
   @records_key "engines"
   @locks_key "locks"
@@ -43,6 +44,75 @@ defmodule Cycle.EngineRegistry do
   defmodule Lock do
     @moduledoc false
     defstruct name: nil, ref: nil, resolved_revision: nil, installed_at: nil, extra: %{}
+  end
+
+  def read(path) when is_binary(path) do
+    with {:ok, raw} <-
+           Store.read(path, %{"schema_version" => Schema.schema_version(), @records_key => []}) do
+      from_map(raw)
+    end
+  end
+
+  def write(path, %__MODULE__{} = registry) when is_binary(path) do
+    Store.write(path, to_map(registry))
+  end
+
+  def read_lock(path) when is_binary(path) do
+    with {:ok, raw} <-
+           Store.read(path, %{"schema_version" => Schema.schema_version(), @locks_key => []}) do
+      lock_from_map(raw)
+    end
+  end
+
+  def write_lock(path, %LockRegistry{} = registry) when is_binary(path) do
+    Store.write(path, lock_to_map(registry))
+  end
+
+  def default_record(config, engine_id) do
+    managed = get_in(config.engines, ["managed", engine_id.name]) || %{}
+    install_path = install_path(config, engine_id)
+
+    %Engine{
+      id: engine_id.id,
+      name: engine_id.name,
+      source: managed["repo"],
+      ref: engine_id.ref,
+      install_path: install_path,
+      capabilities: %{"adapter" => "symphony"},
+      health: %{"state" => health_state(install_path)},
+      capacity: %{"max_concurrent_runs" => get_in(config.scheduler, ["max_concurrent_runs"])}
+    }
+  end
+
+  def install_path(config, engine_id) do
+    install_root = get_in(config.engines, ["install_root"]) || config.paths.engines_dir
+    Path.join([install_root, engine_id.name, engine_id.ref])
+  end
+
+  def upsert(%__MODULE__{} = registry, %Engine{} = engine) do
+    engines =
+      registry.engines
+      |> Enum.reject(&(&1.id == engine.id))
+      |> Kernel.++([engine])
+
+    %{registry | engines: engines}
+  end
+
+  def upsert_lock(%LockRegistry{} = registry, %Lock{} = lock) do
+    locks =
+      registry.locks
+      |> Enum.reject(&(&1.name == lock.name and &1.ref == lock.ref))
+      |> Kernel.++([lock])
+
+    %{registry | locks: locks}
+  end
+
+  def find(%__MODULE__{} = registry, engine_id) do
+    Enum.find(registry.engines, &(&1.id == engine_id.id))
+  end
+
+  def lock_for(%LockRegistry{} = registry, engine_id) do
+    Enum.find(registry.locks, &(&1.name == engine_id.name and &1.ref == engine_id.ref))
   end
 
   def from_map(raw) do
@@ -108,8 +178,41 @@ defmodule Cycle.EngineRegistry do
       Schema.optional_map(engine, "capacity", path)
     ]
     |> List.flatten()
+    |> Kernel.++(validate_id(engine, path))
     |> Kernel.++(validate_health(engine["health"], "#{path}.health"))
+    |> Kernel.++(validate_source(engine["source"], "#{path}.source"))
   end
+
+  defp validate_id(engine, path) do
+    with id when is_binary(id) <- engine["id"],
+         name when is_binary(name) <- engine["name"],
+         ref when is_binary(ref) <- engine["ref"],
+         {:ok, parsed} <- Cycle.EngineId.parse(id),
+         true <- parsed.name == name and parsed.ref == ref do
+      []
+    else
+      {:error, reason} -> [Schema.error("#{path}.id", reason)]
+      false -> [Schema.error("#{path}.id", "must match name and ref")]
+      _ -> []
+    end
+  end
+
+  defp validate_source(source, path) when is_binary(source) do
+    uri = URI.parse(source)
+
+    cond do
+      uri.userinfo ->
+        [Schema.error(path, "must not contain credentials")]
+
+      uri.scheme in ["http", "https", "git", "ssh"] and is_binary(uri.host) ->
+        []
+
+      true ->
+        [Schema.error(path, "must be a git repository URL")]
+    end
+  end
+
+  defp validate_source(_source, _path), do: []
 
   defp validate_health(nil, path), do: [Schema.error(path, "is required")]
 
@@ -171,5 +274,9 @@ defmodule Cycle.EngineRegistry do
       "installed_at" => lock.installed_at
     }
     |> Schema.put_extra(lock.extra)
+  end
+
+  defp health_state(path) do
+    if File.dir?(Path.join(path, ".git")), do: "healthy", else: "missing"
   end
 end
