@@ -23,8 +23,9 @@ defmodule Cycle.MixProject do
 
   defp deps do
     [
+      {:bandit, "~> 1.9"},
       {:jason, "~> 1.4"},
-      {:plug, "~> 1.18", only: :test},
+      {:plug, "~> 1.18"},
       {:req, "~> 0.5"},
       {:yaml_elixir, "~> 2.11"}
     ]
