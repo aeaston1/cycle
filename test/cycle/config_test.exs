@@ -146,6 +146,47 @@ defmodule Cycle.ConfigTest do
     refute inspect(display) =~ "lin_super_secret"
   end
 
+  test "service api defaults to localhost port 4765" do
+    assert {:ok, config} = Config.load(env: %{}, home: @home)
+
+    assert get_in(config.service, ["api", "enabled"]) == true
+    assert get_in(config.service, ["api", "bind"]) == "127.0.0.1"
+    assert get_in(config.service, ["api", "port"]) == 4765
+  end
+
+  test "non-local service api bind requires explicit opt-in" do
+    with_temp_config(
+      """
+      service:
+        api:
+          bind: 0.0.0.0
+      """,
+      fn config_path ->
+        assert {:error, errors} = Config.load(env: %{}, home: @home, config_path: config_path)
+
+        assert %{
+                 path: "service.api.allow_non_local",
+                 reason: "must be true when service.api.bind is not localhost"
+               } in errors
+      end
+    )
+  end
+
+  test "non-local service api bind loads with explicit opt-in" do
+    with_temp_config(
+      """
+      service:
+        api:
+          bind: 0.0.0.0
+          allow_non_local: true
+      """,
+      fn config_path ->
+        assert {:ok, config} = Config.load(env: %{}, home: @home, config_path: config_path)
+        assert get_in(config.service, ["api", "bind"]) == "0.0.0.0"
+      end
+    )
+  end
+
   defp with_temp_config(contents, fun) do
     root = temp_root()
     config_path = Path.join(root, "config.yaml")

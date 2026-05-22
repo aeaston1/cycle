@@ -363,6 +363,7 @@ defmodule Cycle.CLITest do
       end)
 
     assert output =~ "Cycle status"
+    assert output =~ "logs:"
     assert output =~ "api:"
   end
 
@@ -538,6 +539,7 @@ defmodule Cycle.CLITest do
         "cycle-symphony-fixture-#{System.unique_integer([:positive, :monotonic])}"
       )
 
+    File.rm_rf!(root)
     File.mkdir_p!(Path.join(root, "elixir/bin"))
     File.write!(Path.join(root, "README.md"), "# Symphony fixture\n")
 

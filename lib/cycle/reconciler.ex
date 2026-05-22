@@ -32,6 +32,7 @@ defmodule Cycle.Reconciler do
   @spec start(Cycle.Config.t(), keyword()) :: :ok | {:ok, Result.t()} | {:error, term()}
   def start(config, opts \\ []) do
     logger = Keyword.get(opts, :logger, &default_log/1)
+    :ok = Cycle.Log.configure(config)
 
     cond do
       Keyword.get(opts, :dry_run, false) ->
@@ -47,6 +48,7 @@ defmodule Cycle.Reconciler do
 
   @spec reconcile_once(Cycle.Config.t(), keyword()) :: {:ok, Result.t()} | {:error, term()}
   def reconcile_once(config, opts \\ []) do
+    :ok = Cycle.Log.configure(config)
     client = Keyword.get_lazy(opts, :linear_client, fn -> Client.new(config) end)
     now = Keyword.get_lazy(opts, :now, fn -> DateTime.utc_now() end)
 
@@ -144,11 +146,24 @@ defmodule Cycle.Reconciler do
     refreshed =
       %{registry | engines: Enum.map(registry.engines, &refresh_engine_health(&1, opts))}
 
+    Enum.each(refreshed.engines, &log_engine_health(config, &1))
+
     with :ok <- EngineRegistry.write(registry_path, refreshed), do: {:ok, refreshed}
   end
 
   defp refresh_engine_health(engine, opts) do
     %{engine | health: Health.check(engine, Keyword.get(opts, :engine_health_opts, []))}
+  end
+
+  defp log_engine_health(config, engine) do
+    if get_in(engine.health || %{}, ["state"]) not in ["healthy", nil] do
+      Cycle.Log.log_event(config, :warning, "engine health check failed", %{
+        "engine_id" => engine.id,
+        "state" => get_in(engine.health || %{}, ["state"]),
+        "reason" => get_in(engine.health || %{}, ["reason"]),
+        "path" => get_in(engine.health || %{}, ["path"])
+      })
+    end
   end
 
   defp list_candidate_issues(config, client, projects, opts) do
@@ -166,23 +181,45 @@ defmodule Cycle.Reconciler do
           {:cont, {:ok, acc ++ normalized}}
 
         {:error, reason} ->
+          Cycle.Log.log_event(config, :error, "discovery issue listing failed", %{
+            "project_id" => project_id,
+            "project" => get_in(project.linear_project || %{}, ["name"]),
+            "error" => inspect(reason)
+          })
+
           {:halt, {:error, reason}}
       end
     end)
   end
 
   defp decide(config, issues, engine_registry, run_store, client, opts) do
-    Scheduler.decide(issues,
-      active_states: get_in(config.linear, ["active_states"]) || [],
-      terminal_states: get_in(config.linear, ["terminal_states"]) || [],
-      default_engine_id: get_in(config.engines, ["default"]),
-      engine_registry: engine_registry,
-      run_store: run_store,
-      global_capacity: get_in(config.scheduler, ["max_concurrent_runs"]),
-      scheduler: config.scheduler,
-      worker_host: hostname(),
-      refresh_issue: Keyword.get(opts, :refresh_issue, &Client.refresh_issue(client, &1.id))
-    )
+    decisions =
+      Scheduler.decide(issues,
+        active_states: get_in(config.linear, ["active_states"]) || [],
+        terminal_states: get_in(config.linear, ["terminal_states"]) || [],
+        default_engine_id: get_in(config.engines, ["default"]),
+        engine_registry: engine_registry,
+        run_store: run_store,
+        global_capacity: get_in(config.scheduler, ["max_concurrent_runs"]),
+        scheduler: config.scheduler,
+        worker_host: hostname(),
+        refresh_issue: Keyword.get(opts, :refresh_issue, &Client.refresh_issue(client, &1.id))
+      )
+
+    Enum.each(decisions, &log_scheduler_decision(config, &1))
+    decisions
+  end
+
+  defp log_scheduler_decision(config, decision) do
+    if decision.status != :dispatch do
+      Cycle.Log.log_event(config, :info, "scheduler gate decision", %{
+        "issue" => decision.issue.identifier || decision.issue.id,
+        "status" => Atom.to_string(decision.status),
+        "reason_code" => decision.reason_code,
+        "message" => decision.message,
+        "details" => decision.details
+      })
+    end
   end
 
   defp apply_decisions(config, decisions, opts) do
@@ -243,6 +280,12 @@ defmodule Cycle.Reconciler do
           {:ok, {:dispatched, Map.put(status, "request", request)}}
 
         {:queued, error} ->
+          Cycle.Log.log_event(config, :error, "engine dispatch failed or queued", %{
+            "issue" => decision.issue.identifier || decision.issue.id,
+            "engine_id" => decision.engine.id,
+            "error" => error
+          })
+
           queued = %{
             decision
             | status: :queued,
@@ -289,7 +332,9 @@ defmodule Cycle.Reconciler do
       "state" => state,
       "status" => Atom.to_string(decision.status),
       "reason_code" => decision.reason_code,
-      "message" => decision.message
+      "message" => decision.message,
+      "summary" =>
+        String.trim("#{decision.reason_code || decision.status} #{decision.message || ""}")
     }
   end
 
