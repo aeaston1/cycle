@@ -1,6 +1,7 @@
 defmodule Cycle.CLITest do
   use ExUnit.Case, async: false
 
+  import Plug.Conn
   import ExUnit.CaptureIO
 
   test "prints the version" do
@@ -127,6 +128,73 @@ defmodule Cycle.CLITest do
   test "project discover validates parser options before external calls" do
     assert Cycle.CLI.run(["project", "discover", "--limit", "not-a-number"]) ==
              {:error, "--limit must be a positive integer", 1}
+  end
+
+  test "project discover writes registry and prints opted-in records with fake Linear" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = :"cli-discover-test-#{System.unique_integer([:positive])}"
+      previous_key = System.get_env("LINEAR_API_KEY")
+      previous_req_options = Application.get_env(:cycle, :linear_req_options)
+
+      System.put_env("LINEAR_API_KEY", "lin_test")
+
+      Application.put_env(
+        :cycle,
+        :linear_req_options,
+        Cycle.TestSupport.linear_graphql_req_options(name)
+      )
+
+      on_exit(fn ->
+        restore_env("LINEAR_API_KEY", previous_key)
+
+        if previous_req_options do
+          Application.put_env(:cycle, :linear_req_options, previous_req_options)
+        else
+          Application.delete_env(:cycle, :linear_req_options)
+        end
+      end)
+
+      Req.Test.stub(name, fn conn ->
+        {:ok, body, conn} = read_body(conn)
+        assert Jason.decode!(body)["variables"]["first"] == 5
+
+        Req.Test.json(conn, %{
+          "data" => %{
+            "projects" => %{
+              "nodes" => [
+                %{
+                  "id" => "project-id",
+                  "name" => "Cycle Project",
+                  "slugId" => "CYCLE",
+                  "url" => "https://linear.app/example/project/cycle",
+                  "description" => """
+                  cycle:
+                    enabled: true
+                    repo: https://github.com/OWNER/REPO.git
+                  """,
+                  "content" => nil
+                }
+              ],
+              "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+            }
+          }
+        })
+      end)
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["project", "discover", "--limit", "5"]) == :ok
+        end)
+
+      assert output =~ "NAMESPACE\tNAME\tSLUG\tREPO\tWORKFLOW\tSTATUS\tLAST_ERROR"
+
+      assert output =~
+               "cycle\tCycle Project\tCYCLE\thttps://github.com/OWNER/REPO.git\tWORKFLOW.md\tvalid"
+
+      assert output =~ "Wrote 1 project records"
+
+      assert File.exists?(Path.join(cycle_home, "projects.yaml"))
+    end)
   end
 
   test "status is accepted without a running Symphony service" do

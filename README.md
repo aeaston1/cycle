@@ -31,7 +31,7 @@ cycle status
 - `cycle symphony install`
 - `cycle symphony path`
 - `cycle project opt-in --repo <git-repository-url>`
-- `cycle project discover`
+- `cycle project discover [--limit N] [--raw]`
 - `cycle start`
 - `cycle status`
 - `cycle service install`
@@ -52,6 +52,8 @@ cycle:
 ```
 
 See `docs/metadata-spec.md`.
+
+`cycle project discover --raw` prints normalized discovery records as JSON.
 
 ## Documentation
 
