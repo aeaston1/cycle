@@ -15,12 +15,75 @@ cycle_config_home() {
 }
 
 cycle_config_file() {
+  printf '%s\n' "$(cycle_config_home)/config.yaml"
+}
+
+legacy_cycle_config_file() {
   printf '%s\n' "$(cycle_config_home)/config.env"
 }
 
 engine_dir() {
   local ref="${1:-$DEFAULT_SYMPHONY_REF}"
   printf '%s\n' "$(cycle_home)/engines/openai-symphony/${ref}"
+}
+
+config_scalar() {
+  local path="$1"
+  local config
+  config="$(cycle_config_file)"
+
+  [ -f "$config" ] || return 0
+
+  case "$path" in
+    service.status_url)
+      awk '
+        /^service:[[:space:]]*$/ { in_service=1; next }
+        /^[^[:space:]][^:]*:[[:space:]]*$/ { in_service=0 }
+        in_service && /^[[:space:]]+status_url:[[:space:]]*/ {
+          sub(/^[[:space:]]+status_url:[[:space:]]*/, "")
+          gsub(/^["'\'']|["'\'']$/, "")
+          print
+          exit
+        }
+      ' "$config"
+      ;;
+    engines.managed.openai-symphony.repo)
+      awk '
+        /^engines:[[:space:]]*$/ { in_engines=1; next }
+        /^[^[:space:]][^:]*:[[:space:]]*$/ { in_engines=0 }
+        in_engines && /^[[:space:]]+repo:[[:space:]]*/ {
+          sub(/^[[:space:]]+repo:[[:space:]]*/, "")
+          gsub(/^["'\'']|["'\'']$/, "")
+          print
+          exit
+        }
+      ' "$config"
+      ;;
+    engines.managed.openai-symphony.default_ref)
+      awk '
+        /^engines:[[:space:]]*$/ { in_engines=1; next }
+        /^[^[:space:]][^:]*:[[:space:]]*$/ { in_engines=0 }
+        in_engines && /^[[:space:]]+default_ref:[[:space:]]*/ {
+          sub(/^[[:space:]]+default_ref:[[:space:]]*/, "")
+          gsub(/^["'\'']|["'\'']$/, "")
+          print
+          exit
+        }
+      ' "$config"
+      ;;
+  esac
+}
+
+configured_status_url() {
+  printf '%s\n' "${CYCLE_STATUS_URL:-$(config_scalar service.status_url)}"
+}
+
+configured_symphony_repo() {
+  printf '%s\n' "${CYCLE_SYMPHONY_REPO:-$(config_scalar engines.managed.openai-symphony.repo)}"
+}
+
+configured_symphony_ref() {
+  printf '%s\n' "${CYCLE_SYMPHONY_REF:-$(config_scalar engines.managed.openai-symphony.default_ref)}"
 }
 
 usage() {
@@ -73,7 +136,7 @@ linear_api_key() {
   fi
 
   local config
-  config="$(cycle_config_file)"
+  config="$(legacy_cycle_config_file)"
 
   if [ -f "$config" ]; then
     sed -n "s/^LINEAR_API_KEY=['\"]\\{0,1\\}\\([^'\"]*\\)['\"]\\{0,1\\}$/\\1/p" "$config" | tail -n 1
@@ -81,8 +144,10 @@ linear_api_key() {
 }
 
 parse_ref_and_repo() {
-  SYMPHONY_REPO="$DEFAULT_SYMPHONY_REPO"
-  SYMPHONY_REF="$DEFAULT_SYMPHONY_REF"
+  SYMPHONY_REPO="$(configured_symphony_repo)"
+  SYMPHONY_REF="$(configured_symphony_ref)"
+  SYMPHONY_REPO="${SYMPHONY_REPO:-$DEFAULT_SYMPHONY_REPO}"
+  SYMPHONY_REF="${SYMPHONY_REF:-$DEFAULT_SYMPHONY_REF}"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -195,8 +260,8 @@ cmd_linear_configure() {
   config_dir="$(cycle_config_home)"
   mkdir -p "$config_dir"
   umask 077
-  printf 'LINEAR_API_KEY=%s\n' "$token" >"$(cycle_config_file)"
-  info "Saved Linear configuration to $(cycle_config_file)"
+  printf 'LINEAR_API_KEY=%s\n' "$token" >"$(legacy_cycle_config_file)"
+  info "Saved Linear configuration to $(legacy_cycle_config_file)"
 }
 
 cmd_symphony_install() {
@@ -230,7 +295,9 @@ cmd_symphony_install() {
 }
 
 cmd_symphony_path() {
-  local ref="$DEFAULT_SYMPHONY_REF"
+  local ref
+  ref="$(configured_symphony_ref)"
+  ref="${ref:-$DEFAULT_SYMPHONY_REF}"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -352,7 +419,9 @@ cmd_project_discover() {
 }
 
 cmd_status() {
-  local state_url="$DEFAULT_STATE_URL"
+  local state_url
+  state_url="$(configured_status_url)"
+  state_url="${state_url:-$DEFAULT_STATE_URL}"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -415,7 +484,9 @@ cmd_status() {
 cmd_start() {
   local workflow=""
   local port=4000
-  local ref="$DEFAULT_SYMPHONY_REF"
+  local ref
+  ref="$(configured_symphony_ref)"
+  ref="${ref:-$DEFAULT_SYMPHONY_REF}"
   local dry_run=0
 
   while [ "$#" -gt 0 ]; do
