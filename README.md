@@ -158,6 +158,7 @@ cycle status
 Default paths:
 
 - config: `${XDG_CONFIG_HOME:-~/.config}/cycle`
+- primary config file: `${XDG_CONFIG_HOME:-~/.config}/cycle/config.yaml`
 - state: `${CYCLE_HOME:-~/.local/share/cycle}`
 - engines: `${CYCLE_HOME}/engines/openai-symphony/<ref>`
 
@@ -199,7 +200,7 @@ Missing from this Cycle repo scaffold:
 - real service install/start/status daemon behavior
 - release workflow and built artifacts
 - Homebrew tap update
-- automated tests beyond CLI smoke checks
+- automated tests beyond CLI unit tests and smoke checks
 - commit/push of the scaffold
 
 The adapted Symphony source used as the behavioral reference is copied under `reference/adapted-symphony/` for porting.

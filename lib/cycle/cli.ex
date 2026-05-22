@@ -86,7 +86,6 @@ defmodule Cycle.CLI do
       end)
 
     optional("curl", "project discovery and status API checks will be limited")
-    optional("ruby", "JSON formatting for discovery/status will be limited")
 
     if present?(key),
       do: puts("  ok:    LINEAR_API_KEY is configured"),
@@ -142,15 +141,23 @@ defmodule Cycle.CLI do
               {:error, "LINEAR_API_KEY contains whitespace; refusing to write it", 3}
 
             true ->
-              write_linear_config(token)
+              source = if opts[:token], do: :token, else: :env
+              write_linear_config(token, source)
           end
       end
     end
   end
 
-  defp write_linear_config(token) do
+  defp write_linear_config(token, source) do
     File.mkdir_p!(config_home())
-    File.write!(config_file(), "LINEAR_API_KEY=#{token}\n")
+
+    content =
+      case source do
+        :token -> "linear:\n  api_key: #{Jason.encode!(token)}\n"
+        :env -> "linear:\n  api_key_env: LINEAR_API_KEY\n"
+      end
+
+    File.write!(config_file(), content)
     File.chmod(config_file(), 0o600)
     puts("Saved Linear configuration to #{config_file()}")
   end
@@ -239,8 +246,7 @@ defmodule Cycle.CLI do
            parse_options(args, %{limit: "50"}, %{"--limit" => :limit, "--raw" => :raw}),
          :ok <- validate_limit(opts.limit),
          :ok <- require_linear_key(),
-         :ok <- require_command("curl"),
-         :ok <- require_command("ruby") do
+         :ok <- require_command("curl") do
       query =
         "query CycleProjectDiscovery($first: Int!) { projects(first: $first) { nodes { id name slugId url description content } } }"
 
@@ -489,16 +495,30 @@ defmodule Cycle.CLI do
         "cycle"
       )
 
-  defp config_file, do: Path.join(config_home(), "config.env")
+  defp config_file, do: Path.join(config_home(), "config.yaml")
+  defp legacy_config_file, do: Path.join(config_home(), "config.env")
   defp engine_dir(ref), do: Path.join([cycle_home(), "engines/openai-symphony", ref])
 
   defp linear_api_key do
-    System.get_env("LINEAR_API_KEY") || config_linear_api_key()
+    System.get_env("LINEAR_API_KEY") || config_linear_api_key_env() ||
+      legacy_config_linear_api_key()
   end
 
-  defp config_linear_api_key do
-    with true <- File.exists?(config_file()),
-         {:ok, content} <- File.read(config_file()),
+  defp config_linear_api_key_env do
+    with {:ok, %{"linear" => linear}} <- YamlElixir.read_from_file(config_file()) do
+      cond do
+        present?(linear["api_key"]) -> linear["api_key"]
+        present?(linear["api_key_env"]) -> System.get_env(linear["api_key_env"])
+        true -> nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp legacy_config_linear_api_key do
+    with true <- File.exists?(legacy_config_file()),
+         {:ok, content} <- File.read(legacy_config_file()),
          [_, token] <- Regex.run(~r/^LINEAR_API_KEY=['"]?([^'"\n]*)['"]?$/m, content) do
       token
     else
