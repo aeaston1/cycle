@@ -22,7 +22,13 @@ defmodule Cycle.StatusSnapshot do
     health_opts = Keyword.get(opts, :health_opts, [])
 
     with {:ok, config} <- Config.load(env: env, home: home) do
-      {:ok, from_config(config, env: env, api_get: api_get, health_opts: health_opts)}
+      {:ok,
+       from_config(config,
+         env: env,
+         api_get: api_get,
+         health_opts: health_opts,
+         migration_opts: Keyword.get(opts, :migration_opts, [])
+       )}
     end
   end
 
@@ -31,6 +37,7 @@ defmodule Cycle.StatusSnapshot do
     env = Keyword.get(opts, :env, System.get_env())
     api_get = Keyword.get(opts, :api_get, &Req.get/2)
     health_opts = Keyword.get(opts, :health_opts, [])
+    migration_opts = Keyword.get(opts, :migration_opts, [])
 
     {projects, projects_registry} = load_projects(config.projects["registry_path"])
     {engines, engines_registry} = load_engines(config.engines["registry_path"])
@@ -72,7 +79,12 @@ defmodule Cycle.StatusSnapshot do
       "drift" => drift,
       "discovery" => %{"last_errors" => discovery_errors(projects)},
       "last_errors" => last_errors(projects, runs, engines),
-      "service" => service_summary(config, api_get)
+      "service" => service_summary(config, api_get),
+      "migration" =>
+        Cycle.Migration.external_symphony(
+          config,
+          Keyword.merge([api_get: api_get], migration_opts)
+        )
     }
   end
 

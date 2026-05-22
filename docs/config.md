@@ -118,6 +118,7 @@ service:
     enabled: true
     bind: 127.0.0.1
     port: 4765
+  external_symphony_status_url: null
   logs:
     path: ${CYCLE_HOME}/logs/cycle.log
 ```
@@ -133,6 +134,11 @@ Scheduler budget and rate-limit gates accept `mode: off`, `mode: warn`, or
 `cycle status` and scheduler decisions without blocking new work; block mode
 prevents new dispatch with the configured `reason`. Existing running work is
 not stopped by these gates.
+
+`service.external_symphony_status_url` is an optional read-only comparison URL
+for migration from an existing Symphony service. It can also be set with
+`CYCLE_EXTERNAL_SYMPHONY_STATUS_URL`. Cycle only reports reachability for this
+URL; it does not use it for dispatch or service lifecycle actions.
 
 ## Legacy Config Compatibility
 
