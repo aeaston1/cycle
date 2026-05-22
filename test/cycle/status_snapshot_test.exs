@@ -21,6 +21,7 @@ defmodule Cycle.StatusSnapshotTest do
                "discovery",
                "drift",
                "engines",
+               "last_errors",
                "linear",
                "paths",
                "projects",
@@ -31,6 +32,10 @@ defmodule Cycle.StatusSnapshotTest do
              ]
 
       assert snapshot["schema"] == "cycle.status_snapshot.v1"
+
+      assert snapshot["paths"]["logs"] ==
+               Path.join(cycle_home_from_snapshot(snapshot), "logs/cycle.log")
+
       assert snapshot["linear"] == %{"auth" => "missing"}
       assert snapshot["registries"]["projects"]["state"] == "ok"
       assert snapshot["registries"]["engines"]["state"] == "ok"
@@ -82,6 +87,9 @@ defmodule Cycle.StatusSnapshotTest do
       assert [%{"project" => "Broken", "error" => "workflow missing"}] =
                snapshot["discovery"]["last_errors"]
 
+      assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "discovery"))
+      assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "run"))
+      assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "engine"))
       assert snapshot["service"]["api"]["state"] == "healthy"
     end)
   end
@@ -241,4 +249,6 @@ defmodule Cycle.StatusSnapshotTest do
       "evidence" => [%{"type" => "log", "path" => "/tmp/cycle/#{id}.log"}]
     }
   end
+
+  defp cycle_home_from_snapshot(snapshot), do: snapshot["paths"]["state"]
 end

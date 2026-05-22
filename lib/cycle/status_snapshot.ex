@@ -44,6 +44,7 @@ defmodule Cycle.StatusSnapshot do
       "paths" => %{
         "config" => config.paths.config_file,
         "state" => config.paths.state_dir,
+        "logs" => Cycle.Log.path(config),
         "projects_registry" => config.projects["registry_path"],
         "engines_registry" => config.engines["registry_path"],
         "runs_registry" => runs_path
@@ -60,6 +61,7 @@ defmodule Cycle.StatusSnapshot do
       "capacity" => capacity_summary(config, projects, engines, runs),
       "drift" => drift,
       "discovery" => %{"last_errors" => discovery_errors(projects)},
+      "last_errors" => last_errors(projects, runs, engines),
       "service" => service_summary(config, api_get)
     }
   end
@@ -283,6 +285,44 @@ defmodule Cycle.StatusSnapshot do
     end)
   end
 
+  defp last_errors(projects, runs, engines) do
+    discovery =
+      projects
+      |> Enum.filter(&present?(&1.error))
+      |> Enum.map(fn project ->
+        %{
+          "source" => "discovery",
+          "summary" => project.error,
+          "project" => get_in(project.linear_project || %{}, ["name"])
+        }
+      end)
+
+    run_errors =
+      runs
+      |> Enum.filter(&(&1.state in ["blocked", "failed", "stale"]))
+      |> Enum.map(fn run ->
+        %{
+          "source" => "run",
+          "summary" => get_in(run.last_event || %{}, ["summary"]),
+          "issue" => get_in(run.issue || %{}, ["identifier"]),
+          "code" => get_in(run.last_event || %{}, ["reason_code"])
+        }
+      end)
+
+    engine_errors =
+      engines
+      |> Enum.filter(&(health_state(&1) not in ["healthy", "unknown"]))
+      |> Enum.map(fn engine ->
+        %{
+          "source" => "engine",
+          "summary" => get_in(engine.health || %{}, ["reason"]),
+          "engine" => engine.id
+        }
+      end)
+
+    Enum.take(discovery ++ run_errors ++ engine_errors, 10)
+  end
+
   defp service_summary(config, api_get) do
     url =
       get_in(config.service, ["status_url"]) ||
@@ -303,7 +343,10 @@ defmodule Cycle.StatusSnapshot do
   defp redact_event(nil), do: nil
 
   defp redact_event(event) when is_map(event),
-    do: Map.take(event, ["summary", "code", "reason", "reason_code", "type", "message"])
+    do:
+      event
+      |> Cycle.Log.redact()
+      |> Map.take(["summary", "code", "reason", "reason_code", "type", "message"])
 
   defp redact_event(_event), do: nil
 

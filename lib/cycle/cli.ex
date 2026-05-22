@@ -347,6 +347,7 @@ defmodule Cycle.CLI do
     puts("Cycle status")
     puts("  config: #{snapshot["paths"]["config"]}")
     puts("  state:  #{snapshot["paths"]["state"]}")
+    puts("  logs:   #{snapshot["paths"]["logs"]}")
     puts("  engine: #{engine_health} at #{engine["install_path"]}")
 
     if get_in(engine, ["health", "reason"]) do
@@ -384,6 +385,10 @@ defmodule Cycle.CLI do
       puts("  discovery error: #{error["project"] || "unknown"}: #{error["error"]}")
     end)
 
+    Enum.each(snapshot["last_errors"], fn error ->
+      puts("  last error: #{error["source"]}: #{error["summary"] || error["code"] || "unknown"}")
+    end)
+
     api = snapshot["service"]["api"]
     puts("  api: #{api["state"]} at #{api["url"]}")
   end
@@ -396,20 +401,36 @@ defmodule Cycle.CLI do
              "--once" => :once
            }),
          {:ok, config} <- load_config() do
-      case Cycle.Reconciler.start(config,
-             dry_run: opts[:dry_run],
-             no_dispatch: opts[:no_dispatch],
-             once: opts[:once]
-           ) do
-        :ok ->
-          :ok
+      with :ok <- maybe_start_api(config, opts) do
+        case Cycle.Reconciler.start(config,
+               dry_run: opts[:dry_run],
+               no_dispatch: opts[:no_dispatch],
+               once: opts[:once]
+             ) do
+          :ok ->
+            :ok
 
-        {:ok, result} ->
-          print_reconcile_result(result)
+          {:ok, result} ->
+            print_reconcile_result(result)
 
-        {:error, reason} ->
-          {:error, reconciler_error(reason), 2}
+          {:error, reason} ->
+            {:error, reconciler_error(reason), 2}
+        end
       end
+    end
+  end
+
+  defp maybe_start_api(_config, %{dry_run: true}), do: :ok
+
+  defp maybe_start_api(config, _opts) do
+    if get_in(config.service, ["api", "enabled"]) == true do
+      case Cycle.API.Router.start_link(config: config) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> {:error, "could not start Cycle status API: #{inspect(reason)}", 1}
+      end
+    else
+      :ok
     end
   end
 
