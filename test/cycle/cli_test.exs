@@ -181,9 +181,21 @@ defmodule Cycle.CLITest do
         })
       end)
 
+      checkout_root =
+        Path.join(
+          System.tmp_dir!(),
+          "cycle-cli-discover-test-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(Path.join(checkout_root, "OWNER/REPO"))
+      File.write!(Path.join(checkout_root, "OWNER/REPO/WORKFLOW.md"), "# Workflow\n")
+      on_exit(fn -> File.rm_rf!(checkout_root) end)
+
       output =
         capture_io(fn ->
-          assert Cycle.CLI.run(["project", "discover", "--limit", "5"]) == :ok
+          File.cd!(checkout_root, fn ->
+            assert Cycle.CLI.run(["project", "discover", "--limit", "5"]) == :ok
+          end)
         end)
 
       assert output =~ "NAMESPACE\tNAME\tSLUG\tREPO\tWORKFLOW\tSTATUS\tLAST_ERROR"
