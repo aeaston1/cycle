@@ -6,6 +6,7 @@ defmodule Cycle.StatusSnapshot do
   alias Cycle.Config
   alias Cycle.EngineRegistry
   alias Cycle.ProjectRegistry
+  alias Cycle.ReviewJudgeRegistry
   alias Cycle.RunStore
 
   @run_states ~w(running queued retrying blocked judging completed failed)
@@ -35,6 +36,10 @@ defmodule Cycle.StatusSnapshot do
     {engines, engines_registry} = load_engines(config.engines["registry_path"])
     runs_path = Path.join(config.paths.state_dir, "runs.yaml")
     {runs, runs_registry} = load_runs(runs_path)
+    review_judge_path = ReviewJudgeRegistry.path(config.paths.state_dir)
+
+    {review_judge_records, review_judge_registry, review_judge_meta} =
+      load_review_judge(review_judge_path)
 
     project_summary = project_summary(projects)
     drift = drift_summary(projects)
@@ -47,17 +52,21 @@ defmodule Cycle.StatusSnapshot do
         "logs" => Cycle.Log.path(config),
         "projects_registry" => config.projects["registry_path"],
         "engines_registry" => config.engines["registry_path"],
-        "runs_registry" => runs_path
+        "runs_registry" => runs_path,
+        "review_judge_registry" => review_judge_path
       },
       "registries" => %{
         "projects" => projects_registry,
         "engines" => engines_registry,
-        "runs" => runs_registry
+        "runs" => runs_registry,
+        "review_judge" => review_judge_registry
       },
       "linear" => linear_status(config, env),
       "projects" => project_summary,
       "engines" => engine_summary(config, engines, health_opts),
       "runs" => run_summary(runs),
+      "review_judge" =>
+        review_judge_summary(runs, review_judge_records, review_judge_meta, drift),
       "capacity" => capacity_summary(config, projects, engines, runs),
       "drift" => drift,
       "discovery" => %{"last_errors" => discovery_errors(projects)},
@@ -89,6 +98,14 @@ defmodule Cycle.StatusSnapshot do
       {registry.runs, registry_status(path)}
     else
       {:error, error} -> {[], registry_status(path, error)}
+    end
+  end
+
+  defp load_review_judge(path) do
+    with {:ok, registry} <- ReviewJudgeRegistry.load(path) do
+      {registry.records, registry_status(path), registry.extra}
+    else
+      {:error, error} -> {[], registry_status(path, error), %{}}
     end
   end
 
@@ -198,6 +215,59 @@ defmodule Cycle.StatusSnapshot do
       "timestamps" => run.timestamps || %{},
       "retry" => run.retry || %{},
       "last_event" => redact_event(run.last_event)
+    }
+  end
+
+  defp review_judge_summary(runs, records, meta, drift) do
+    %{
+      "source_queue_count" => Map.get(meta || %{}, "source_queue_count", 0),
+      "active_count" =>
+        Enum.count(runs, &(&1.state == "judging")) + Enum.count(records, &(&1.status == "active")),
+      "last_decisions" => last_decisions(records),
+      "duplicate_skips" => count_reason(records, "duplicate_evidence_hash"),
+      "route_failures" => count_status(records, "failed"),
+      "hard_review_reasons" => hard_review_reasons(records),
+      "policy_drift" => %{"count" => drift["count"], "top" => drift["top"]},
+      "records" => Enum.map(records, &review_judge_record/1)
+    }
+  end
+
+  defp last_decisions(records) do
+    records
+    |> Enum.filter(&present?(&1.decision))
+    |> Enum.sort_by(&get_in(&1.timestamps || %{}, ["updated_at"]), :desc)
+    |> Enum.uniq_by(&get_in(&1.issue || %{}, ["identifier"]))
+    |> Enum.take(5)
+    |> Enum.map(&review_judge_record/1)
+  end
+
+  defp hard_review_reasons(records) do
+    records
+    |> Enum.flat_map(&(&1.hard_stops || []))
+    |> Enum.map(fn
+      %{"code" => code} -> code
+      %{code: code} -> to_string(code)
+      code when is_binary(code) -> code
+      code -> inspect(code)
+    end)
+    |> Enum.frequencies()
+  end
+
+  defp count_reason(records, reason), do: Enum.count(records, &(&1.reason_code == reason))
+  defp count_status(records, status), do: Enum.count(records, &(&1.status == status))
+
+  defp review_judge_record(record) do
+    %{
+      "id" => record.id,
+      "issue" => Map.take(record.issue || %{}, ["id", "identifier"]),
+      "project" => Map.take(record.project || %{}, ["id", "name"]),
+      "status" => record.status,
+      "decision" => record.decision,
+      "reason_code" => record.reason_code,
+      "message" => record.message,
+      "hard_stops" => record.hard_stops || [],
+      "details" => Cycle.Log.redact(record.details || %{}),
+      "timestamps" => record.timestamps || %{}
     }
   end
 

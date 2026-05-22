@@ -166,6 +166,30 @@ defmodule Cycle.Policy.ReviewRouterTest do
     assert_received {:comment, "issue-id"}
   end
 
+  test "records route result when review judge registry path is provided" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-review-router-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    on_exit(fn -> File.rm(path) end)
+
+    assert %ReviewRouter.Result{status: :written} =
+             ReviewRouter.route(
+               issue(),
+               human_review_decision(),
+               opts(review_judge_registry_path: path)
+             )
+
+    assert {:ok, registry} = Cycle.ReviewJudgeRegistry.load(path)
+    assert [record] = registry.records
+    assert record.issue["identifier"] == "CYC-1"
+    assert record.status == "written"
+    assert record.decision == "require_human_review"
+    assert [%{"code" => "sensitive_surface"}] = record.hard_stops
+  end
+
   defp opts(overrides) do
     Keyword.merge(
       [

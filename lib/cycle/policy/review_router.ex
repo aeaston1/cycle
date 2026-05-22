@@ -13,6 +13,7 @@ defmodule Cycle.Policy.ReviewRouter do
   alias Cycle.Linear.Client
   alias Cycle.Policy.EvidenceHash
   alias Cycle.Policy.ReviewJudge.Decision
+  alias Cycle.ReviewJudgeRegistry
 
   defmodule Result do
     @moduledoc "Review judge Linear routing result."
@@ -68,15 +69,19 @@ defmodule Cycle.Policy.ReviewRouter do
            create_comment(client, refreshed.id, comment_body(decision, evidence_hash), opts),
          {:ok, moved_issue} <- maybe_move_issue(client, refreshed, decision, opts) do
       written(issue, refreshed, comment, moved_issue, decision)
+      |> maybe_record_result(opts)
     else
       {:skip, reason_code, message, details} ->
         skipped(issue, reason_code, message, details)
+        |> maybe_record_result(opts)
 
       {:error, stage, reason} ->
         failed(issue, stage, reason)
+        |> maybe_record_result(opts)
 
       {:error, reason} ->
         failed(issue, "linear_write", reason)
+        |> maybe_record_result(opts)
     end
   end
 
@@ -266,6 +271,7 @@ defmodule Cycle.Policy.ReviewRouter do
       details: %{
         "identifier" => original.identifier,
         "decision" => decision.decision,
+        "hard_stops" => decision_hard_stops(decision),
         "moved" => not is_nil(moved_issue)
       }
     }
@@ -305,6 +311,60 @@ defmodule Cycle.Policy.ReviewRouter do
       details: %{"stage" => stage, "error" => inspect(reason)}
     }
   end
+
+  defp maybe_record_result(%Result{} = result, opts) do
+    case Keyword.get(opts, :review_judge_registry_path) do
+      path when is_binary(path) ->
+        _ = ReviewJudgeRegistry.record(path, result_record(result))
+        result
+
+      _ ->
+        result
+    end
+  end
+
+  defp result_record(%Result{} = result) do
+    issue = result.issue || %{}
+
+    %{
+      "id" => "#{issue_identifier(issue) || issue_id(issue) || "issue"}-#{result.status}",
+      "issue" => %{"id" => issue_id(issue), "identifier" => issue_identifier(issue)},
+      "project" => %{"id" => project_id(issue), "name" => project_name(issue)},
+      "status" => Atom.to_string(result.status),
+      "decision" => get_in(result.details || %{}, ["decision"]),
+      "reason_code" => result.reason_code,
+      "message" => result.message,
+      "hard_stops" => get_in(result.details || %{}, ["hard_stops"]) || [],
+      "details" => result.details || %{}
+    }
+  end
+
+  defp issue_id(%{id: id}), do: id
+  defp issue_id(_issue), do: nil
+
+  defp issue_identifier(%{identifier: identifier}), do: identifier
+  defp issue_identifier(_issue), do: nil
+
+  defp project_id(%Issue{project: project}), do: get_in(project || %{}, ["linear_project", "id"])
+  defp project_id(%Client.Issue{project_id: project_id}), do: project_id
+  defp project_id(_issue), do: nil
+
+  defp project_name(%Issue{project: project}),
+    do: get_in(project || %{}, ["linear_project", "name"])
+
+  defp project_name(_issue), do: nil
+
+  defp decision_hard_stops(%Decision{hard_stops: stops}) when is_list(stops) do
+    Enum.map(stops, fn stop ->
+      %{
+        "code" => stop |> Map.get(:code) |> to_string(),
+        "reason" => Map.get(stop, :reason),
+        "details" => Map.get(stop, :details) || %{}
+      }
+    end)
+  end
+
+  defp decision_hard_stops(_decision), do: []
 
   defp present?(value), do: is_binary(value) and value != ""
 end
