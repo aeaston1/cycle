@@ -377,6 +377,22 @@ defmodule Cycle.CLI do
       "  runs: #{run_counts["running"]} running, #{run_counts["queued"]} queued, #{run_counts["retrying"]} retrying, #{run_counts["blocked"]} blocked, #{run_counts["judging"]} judging, #{run_counts["completed"]} completed, #{run_counts["failed"]} failed"
     )
 
+    judge = snapshot["review_judge"]
+
+    puts(
+      "  review judge: #{judge["source_queue_count"]} queued, #{judge["active_count"]} active, #{judge["duplicate_skips"]} duplicate skips, #{judge["route_failures"]} route failures"
+    )
+
+    Enum.each(judge["last_decisions"], fn decision ->
+      puts(
+        "  review decision: #{get_in(decision, ["issue", "identifier"]) || "unknown"} #{decision["decision"] || decision["status"]}"
+      )
+    end)
+
+    Enum.each(judge["hard_review_reasons"], fn {reason, count} ->
+      puts("  hard review: #{reason} #{count}")
+    end)
+
     drift = snapshot["drift"]
     drifted_projects = snapshot["projects"]["details"] |> Enum.count(&(&1["status"] == "drift"))
     puts("  policy drift: #{drift["count"]} records across #{drifted_projects} projects")

@@ -402,6 +402,51 @@ defmodule Cycle.CLITest do
     end)
   end
 
+  test "status summarizes persisted review judge visibility" do
+    with_cycle_home(fn cycle_home ->
+      assert :ok =
+               Cycle.Registry.Store.write(Path.join(cycle_home, "review_judge.yaml"), %{
+                 "schema_version" => 1,
+                 "records" => [
+                   %{
+                     "id" => "judge-AEA-170",
+                     "issue" => %{"id" => "issue-id", "identifier" => "AEA-170"},
+                     "project" => %{"id" => "project-id", "name" => "Cycle"},
+                     "status" => "written",
+                     "decision" => "require_human_review",
+                     "hard_stops" => [%{"code" => "sensitive_surface"}],
+                     "timestamps" => %{"updated_at" => "2026-05-22T12:00:00Z"}
+                   },
+                   %{
+                     "id" => "duplicate-AEA-171",
+                     "issue" => %{"id" => "issue-2", "identifier" => "AEA-171"},
+                     "project" => %{"id" => "project-id", "name" => "Cycle"},
+                     "status" => "skipped",
+                     "reason_code" => "duplicate_evidence_hash",
+                     "timestamps" => %{"updated_at" => "2026-05-22T12:00:00Z"}
+                   },
+                   %{
+                     "id" => "failed-AEA-172",
+                     "issue" => %{"id" => "issue-3", "identifier" => "AEA-172"},
+                     "project" => %{"id" => "project-id", "name" => "Cycle"},
+                     "status" => "failed",
+                     "reason_code" => "linear_write_failed",
+                     "timestamps" => %{"updated_at" => "2026-05-22T12:00:00Z"}
+                   }
+                 ]
+               })
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["status"]) == :ok
+        end)
+
+      assert output =~ "review judge: 0 queued, 0 active, 1 duplicate skips, 1 route failures"
+      assert output =~ "review decision: AEA-170 require_human_review"
+      assert output =~ "hard review: sensitive_surface 1"
+    end)
+  end
+
   test "status reports invalid registry errors" do
     with_cycle_home(fn cycle_home ->
       File.mkdir_p!(cycle_home)
