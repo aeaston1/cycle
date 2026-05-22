@@ -302,17 +302,14 @@ defmodule Cycle.CLI do
     source =
       Enum.join(Enum.filter([project["description"], project["content"]], &present?/1), "\n")
 
-    with [block] <- Regex.run(~r/^cycle:\s*\n(?:[ \t]+.*\n?)*/m, source),
-         true <- Regex.match?(~r/^[ \t]+enabled:\s*true\b/im, block) do
-      repo = Regex.run(~r/^[ \t]+repo:\s*(.+?)\s*$/im, block) |> repo_from_match()
-      [[project["name"], project["slugId"], repo, project["url"]]]
-    else
-      _ -> []
+    case Cycle.ProjectMetadata.parse(source, field: "description") do
+      {:ok, metadata} ->
+        [[project["name"], project["slugId"], metadata.repo_url, project["url"]]]
+
+      _ ->
+        []
     end
   end
-
-  defp repo_from_match([_, repo]), do: repo
-  defp repo_from_match(_), do: ""
 
   defp status(args) do
     with {:ok, opts} <-
