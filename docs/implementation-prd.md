@@ -3114,7 +3114,7 @@ Handoff Notes:
 
 ### TODO CYCLE-M9-004: Define public Cycle skill pack shape without auto-install
 
-Status: Todo
+Status: Done
 Suggested Linear milestone: M9 - Hardening, Scale, And Future Extensions
 Suggested issue title: Specify optional Cycle Codex skill pack
 

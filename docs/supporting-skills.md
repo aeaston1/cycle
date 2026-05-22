@@ -1,13 +1,19 @@
 # Supporting Skills
 
-This machine has supporting Codex skills that help operate the current adapted
-Symphony workflow. They are useful context for Cycle, but they should not all be
-installed automatically by Homebrew.
+Cycle may eventually offer optional Codex skills for operators, but skills are
+not part of the default Cycle install. The Homebrew package installs the Cycle
+CLI and documentation only.
+
+Skills can change how an agent interprets tasks, reads context, and performs
+operator workflows. For that reason, Cycle must treat skill installation as an
+explicit operator action, separate from CLI installation, foreground testing,
+service installation, and Symphony engine management.
 
 ## Symphony-Local Skills Found
 
-These were observed in the local adapted Symphony checkout under
-`.codex/skills`:
+The current adapted Symphony workflow has local skills under `.codex/skills`.
+They are useful design input, but they are not public Cycle deliverables and
+must not be redistributed as-is.
 
 | Skill | Purpose | Cycle recommendation |
 | --- | --- | --- |
@@ -19,11 +25,12 @@ These were observed in the local adapted Symphony checkout under
 | `push` | Push a branch and create/update a PR. | Useful optional agent guidance. Not a core Cycle dependency. |
 
 The `land` skill also includes `land_watch.py`, a helper for watching PR review
-comments, CI, and head updates.
+comments, CI, and head updates. A Cycle version would need to be rewritten
+around Cycle concepts, public paths, and documented operator consent.
 
 ## Global Skills Found
 
-Relevant global skills on this machine include:
+Relevant global skills in the current operator environment include:
 
 | Skill | Purpose | Cycle recommendation |
 | --- | --- | --- |
@@ -34,8 +41,14 @@ Relevant global skills on this machine include:
 
 ## Install Policy
 
-Homebrew should install the Cycle CLI only. It should not write into `~/.codex`,
-repo `.codex/skills`, or global skill directories by default.
+Homebrew installs the Cycle CLI only. It must not write into `~/.codex`, repo
+`.codex/skills`, global skill directories, or any other agent behavior directory.
+
+No Cycle install path may mutate Codex skills unless the operator runs a
+dedicated skill command or performs a documented manual install. If Cycle later
+adds such a command, it must show the target path and requested changes before
+writing files, and it must require explicit confirmation unless the operator
+passes a deliberate non-interactive flag.
 
 Reasons:
 
@@ -44,14 +57,17 @@ Reasons:
 - Public install should avoid mutating user agent configuration silently.
 - Skill installation may require user consent and may change how agents behave.
 
-## Recommended Product Shape
+## Roadmap Command Shape
+
+Skill commands are roadmap-only in the current release. The public CLI does not
+implement them yet, and docs must not imply that they are available today.
 
 Add an explicit optional command later:
 
 ```sh
 cycle skills list
 cycle skills install recommended
-cycle skills install symphony-ops
+cycle skills install cycle-ops
 ```
 
 That command should:
@@ -61,17 +77,35 @@ That command should:
 - install into a clear user-owned location
 - never overwrite local skill edits without a backup or explicit flag
 - distinguish public Cycle skills from machine-local operator skills
+- avoid copying private paths, local service names, secrets, logs, or
+  machine-specific deployment assumptions into public skill content
 
 ## Public Cycle Skill Pack
 
-A future public skill pack could include:
+The first public skill pack should be small and Cycle-owned. Candidate skills:
 
-- `cycle-debug`: inspect Cycle daemon logs, run registry, engine health, and
-  failed dispatch reasons
-- `cycle-linear`: safe Linear issue/project operations using Cycle auth
-- `cycle-release`: prepare release artifacts and Homebrew tap updates
-- `cycle-judge-review`: inspect judge evidence, hashes, and routing decisions
-- `cycle-project-onboarding`: create `cycle:` metadata and repo `WORKFLOW.md`
+| Skill | Scope |
+| --- | --- |
+| `cycle-debug` | Inspect Cycle daemon logs, run registry, engine health, failed dispatch reasons, and policy drift evidence. |
+| `cycle-linear` | Perform safe Linear issue/project operations using Cycle auth and `cycle:` metadata rules. |
+| `cycle-release` | Prepare release artifacts, checksums, docs checks, and Homebrew tap update steps. |
+| `cycle-judge-review` | Inspect judge evidence, hashes, review routing decisions, and reviewer handoff notes. |
+| `cycle-project-onboarding` | Guide repo onboarding with `cycle:` Linear metadata and repo `WORKFLOW.md` setup. |
 
-The existing Symphony skills are good prototypes, but they should be rewritten
-around Cycle concepts before being distributed as Cycle skills.
+The existing Symphony and machine-local skills are prototypes only. Public
+Cycle skills should be authored from scratch or heavily rewritten so they use
+public examples such as `OWNER/REPO`, avoid private machine assumptions, and
+preserve the Cycle/Symphony boundary.
+
+## Manual Install Guidance
+
+Until Cycle implements a skill installer, operators can manually install a
+public skill pack by copying reviewed skill directories into their own Codex
+skill location. Cycle docs should keep that process manual and explicit:
+
+- review the skill source before installation
+- choose the target directory intentionally
+- back up any existing skill with the same name
+- verify that the skill does not contain local secrets or private repository
+  names
+- remove the skill manually if it changes agent behavior in an unwanted way
