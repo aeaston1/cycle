@@ -13,27 +13,23 @@ tracker:
     - Canceled
     - Cancelled
     - Duplicate
-    - Closed
 polling:
   interval_ms: 30000
 workspace:
   root: /home/symphony_workspaces/cycle
 hooks:
   before_run: |
-    if ! command -v mise >/dev/null 2>&1; then
-      echo "mise is required to bootstrap the cupld toolchain" >&2
-      exit 1
-    fi
-    mise trust
-    mise install
-    mise exec -- cargo --version
-    mise exec -- rustc --version
-    mise exec -- rustfmt --version
+    for cmd in bash git codex mise; do
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "$cmd is required for Cycle agent runs" >&2
+        exit 1
+      fi
+    done
   after_create: |
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-      gh repo clone aeaston1/cupld . -- --depth 1
+      gh repo clone aeaston1/cycle . -- --depth 1
     else
-      git clone --depth 1 https://github.com/aeaston1/cupld.git .
+      git clone --depth 1 https://github.com/aeaston1/cycle.git .
     fi
   before_remove: |
     branch="$(git branch --show-current 2>/dev/null || true)"
@@ -46,10 +42,10 @@ hooks:
     if ! gh auth status >/dev/null 2>&1; then
       exit 0
     fi
-    gh pr list --repo aeaston1/cupld --head "$branch" --state open --json number --jq '.[].number' |
+    gh pr list --repo aeaston1/cycle --head "$branch" --state open --json number --jq '.[].number' |
       while IFS= read -r pr_number; do
         if [ -n "$pr_number" ]; then
-          gh pr close "$pr_number" --repo aeaston1/cupld --comment "Closing because the Linear issue for branch $branch entered a terminal state without merge."
+          gh pr close "$pr_number" --repo aeaston1/cycle --comment "Closing because the Linear issue for branch $branch entered a terminal state without merge."
         fi
       done
 agent:
@@ -72,30 +68,20 @@ review_judge:
   reasoning_effort: xhigh
   service_tier: fast
   policy: very_lenient
-  minimum_skip_confidence: medium
+  minimum_skip_confidence: low
   hard_require_human_review:
     paths: []
     labels: []
-cycle:
-  engines:
-    allow:
-      - openai-symphony@main
-  policy_profile: standard
 ---
 
-You are working on Cycle, a Linear-native control plane for running upstream
-OpenAI Symphony engines across many repositories.
+You are working on Linear ticket `{{ issue.identifier }}` for the `cycle` repository.
 
-Cycle is the control plane. Symphony is the execution engine. Preserve that
-boundary in all implementation work. Cycle owns global policy, validation,
-drift reporting, and optional propagation; Symphony should only execute the
-selected issue/workflow through the chosen engine.
-
-Issue:
-- Identifier: {{ issue.identifier }}
-- Title: {{ issue.title }}
-- State: {{ issue.state }}
-- URL: {{ issue.url }}
+Issue context:
+Identifier: {{ issue.identifier }}
+Title: {{ issue.title }}
+Current status: {{ issue.state }}
+URL: {{ issue.url }}
+Branch: {{ issue.branch_name }}
 
 Description:
 {% if issue.description %}
@@ -104,31 +90,86 @@ Description:
 No description provided.
 {% endif %}
 
-## Operating Rules
+Instructions:
 
-1. Do not modify existing Symphony checkouts or stop/restart existing Symphony
-   services unless the operator explicitly asks for that.
-2. Keep public repo content free of private owner/repo names, local paths,
-   secrets, and machine-specific assumptions. The Homebrew tap command
-   `brew install aeaston1/tap/cycle` is the only allowed hardcoded owner/tap
-   reference.
-3. Keep Cycle-owned behavior separate from `reference/adapted-symphony/`.
-   Reference files are source material, not runtime code.
-4. Use `cycle:` metadata as the only Cycle project opt-in namespace.
-5. Do not silently rewrite project `WORKFLOW.md` files during discovery. Any
-   policy propagation must be explicit, auditable, and narrowly scoped.
-6. Do not install or update Codex skills as part of the default Cycle install.
-   Skills are optional operator guidance only.
-7. For docs-only changes, keep docs consistent with the actual scaffold state.
-8. For CLI changes, run `tests/smoke.sh`.
-9. For service, Homebrew, release, packaging, installer, security, or
-   infrastructure changes, expect human review even when automated review judge
-   is enabled.
+1. Work only inside the provided `cycle` workspace copy.
+2. Treat `Backlog` as out of scope; wait for a human to move it to `Todo`.
+3. Treat `Todo` as queued work; move it to `In Progress` before implementation.
+4. Treat `In Progress` as active implementation work.
+5. Treat `Human Review` as a waiting state for human review; do not implement new changes while the ticket is there.
+6. Treat `Rework` as reviewer-requested changes; inspect feedback before editing.
+7. Treat `Merging` as approved work ready to land. Do not create new feature work in `Merging`.
+8. Leave `In Review` unused.
+9. Keep changes focused on the ticket scope.
+10. Do not edit unrelated files or revert existing work unless the ticket explicitly requires it.
+11. If blocked by missing credentials, tools, or unclear requirements, stop and report the blocker clearly.
+12. Final message must include completed work, validation performed, and any blocker.
 
-## Handoff
+## Execution Flow
 
-Final responses should include:
+1. On `Todo`, update the Linear issue state to `In Progress` before making code changes.
+2. Run the workflow `before_run` hook. It must validate the Cycle scaffold without installing engines, starting services, or mutating existing Symphony services:
+   - required local commands are available
+   - `./bin/cycle doctor` passes
+   - `tests/smoke.sh` passes
+   If any of these fail, stop, add a Linear comment with the exact blocker, and do not continue implementation.
+3. Inspect the current repository state:
+   - `git status --short`
+   - `git branch --show-current`
+   - `git rev-parse --short HEAD`
+4. Create or reuse a branch for this issue:
+   - Prefer the Linear-provided branch name when available.
+   - Otherwise use a sanitized branch such as `codex/aea-40-smoke-test-issue`.
+   - Start from the current default branch unless there is already useful work in this workspace.
+5. Implement the ticket with focused commits.
+6. Run relevant validation before publishing:
+   - For CLI-only changes, run `tests/smoke.sh`.
+   - For docs-only changes, verify links and examples manually.
+   - For release-path changes, also review `docs/release.md`, `packaging/homebrew/cycle.rb`, and `.gitignore`.
+7. If no code changes are required, update Linear with a concise note and move the issue to `Human Review`.
 
-- what changed
-- validation performed
-- any remaining blocker or human-review reason
+## PR Creation and Human Review
+
+Before moving an issue to `Human Review`, ensure there is an open PR for the branch when code changed:
+
+1. Confirm the working tree contains only intended changes.
+2. Commit all intended changes with a concise message.
+3. Push the branch:
+   - `git push -u origin HEAD`
+   - If the push is rejected because the branch is stale, fetch and merge `origin/main`, resolve conflicts, rerun validation, then push again.
+   - Use `--force-with-lease` only after a deliberate local history rewrite.
+4. Create or update a PR with `gh`:
+   - If no PR exists: `gh pr create --repo aeaston1/cycle --title "<clear title>" --body "<summary, validation, Linear issue>"`
+   - If a PR exists: update the title/body if the scope changed.
+5. Attach or mention the PR URL in the Linear issue.
+6. Move the Linear issue to `Human Review` only after validation passed and the PR is open.
+
+## Rework
+
+When the issue is in `Rework`:
+
+1. Find the existing PR for the branch.
+2. Read reviewer feedback before editing:
+   - `gh pr view --repo aeaston1/cycle --comments`
+   - `gh pr view --repo aeaston1/cycle --json reviews`
+   - `gh api repos/aeaston1/cycle/pulls/<pr_number>/comments`
+3. Address actionable feedback or reply with a clear reason when pushing back.
+4. Rerun validation, commit, push, update the PR, and move the issue back to `Human Review`.
+
+## Merging
+
+When the issue is in `Merging`:
+
+1. Find the open PR for the current branch.
+2. Confirm the PR is mergeable and has no unresolved actionable review feedback. `Human Review` is the manual approval gate; do not treat an empty GitHub `reviewDecision` as blocking unless branch protection or explicit repo policy requires approval.
+3. Confirm required checks are passing:
+   - `gh pr checks --repo aeaston1/cycle`
+4. If checks fail, inspect logs, fix the issue, rerun validation, commit, and push.
+5. If the PR has merge conflicts, merge latest `origin/main` into the branch, resolve conflicts, rerun validation, and push.
+6. When checks are green and review feedback is handled, squash-merge:
+   - `gh pr merge --repo aeaston1/cycle --squash --delete-branch`
+7. Move the Linear issue to `Done` only after the PR is merged.
+
+## Terminal Cleanup
+
+When a ticket enters a terminal state (`Done`, `Canceled`, `Cancelled`, or `Duplicate`), Symphony removes the matching workspace. The `before_remove` hook closes any still-open PR for the workspace branch before deletion. Merged PRs are left alone.
