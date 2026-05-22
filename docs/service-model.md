@@ -28,6 +28,12 @@ It should:
 
 It should not install a background service.
 
+Useful foreground modes:
+
+- `cycle start --dry-run` prints planned config, registry, polling, and dispatch behavior and exits.
+- `cycle start --once` runs one discovery and scheduler cycle and exits.
+- `cycle start --no-dispatch` records scheduler decisions without launching an engine run.
+
 ## `cycle service install`
 
 `cycle service install` should be explicit and conservative.

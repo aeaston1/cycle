@@ -145,16 +145,16 @@ cycle symphony install
 cycle symphony path
 cycle project opt-in --repo <git-repository-url>
 cycle project discover
+cycle start [--dry-run] [--no-dispatch] [--once]
 cycle status
 cycle service install
 cycle service status
-cycle start --workflow <path-to-WORKFLOW.md>
 ```
 
 The backing behavior is intentionally staged:
 
-- `doctor`, `linear configure`, `symphony install/path`, `project opt-in`, `project discover`, and `status` have useful scaffold behavior now.
-- `start` runs a managed Symphony engine in the foreground when an engine and workflow are present.
+- `doctor`, `linear configure`, `symphony install/path`, `project opt-in`, `project discover`, `start`, and `status` have useful scaffold behavior now.
+- `start` runs the Cycle discovery and scheduling reconciler in the foreground.
 - `service install` remains a placeholder until Cycle owns daemon installation.
 - `service status` reports a read-only service snapshot and does not start, stop, enable, disable, reload, or restart services.
 
@@ -166,7 +166,7 @@ The intended command responsibilities:
 - `cycle symphony path`: print the selected managed engine path.
 - `cycle project opt-in`: print project metadata YAML for Linear descriptions.
 - `cycle project discover`: list opted-in Linear projects and their repos.
-- `cycle start`: run Cycle or a managed engine in the foreground for operator testing.
+- `cycle start`: run Cycle discovery, workflow validation, drift reporting, scheduling, and optional dispatch decisions in the foreground for operator testing.
 - `cycle status`: show local config, engine state, Linear config, watched project count, active runs, judge queue, and service/API health.
 - future `cycle status` and `cycle doctor`: report policy drift and invalid project workflows against Cycle's global policy.
 - `cycle service install`: install the Cycle daemon only after explicit operator setup.

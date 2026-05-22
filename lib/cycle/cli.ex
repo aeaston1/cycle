@@ -15,7 +15,7 @@ defmodule Cycle.CLI do
     cycle help
     cycle doctor
     cycle status [--json]
-    cycle start --workflow PATH [--port PORT] [--version REF] [--dry-run]
+    cycle start [--dry-run] [--no-dispatch] [--once]
     cycle linear configure [--from-env | --api-key TOKEN | --print]
     cycle symphony install [--repo URL] [--version REF]
     cycle symphony path [--version REF]
@@ -384,73 +384,56 @@ defmodule Cycle.CLI do
 
   defp start(args) do
     with {:ok, opts} <-
-           parse_options(args, %{port: "4000", ref: @default_symphony_ref}, %{
-             "--workflow" => :workflow,
-             "--port" => :port,
-             "--version" => :ref,
-             "--ref" => :ref,
-             "--dry-run" => :dry_run
+           parse_options(args, %{}, %{
+             "--dry-run" => :dry_run,
+             "--no-dispatch" => :no_dispatch,
+             "--once" => :once
            }),
-         {:ok, config} <- Cycle.Config.load(),
-         {:ok, engine_id} <- engine_id_for(config, opts.ref) do
-      cond do
-        !present?(opts[:workflow]) ->
-          {:error, "cycle start requires --workflow PATH", 1}
+         {:ok, config} <- load_config() do
+      case Cycle.Reconciler.start(config,
+             dry_run: opts[:dry_run],
+             no_dispatch: opts[:no_dispatch],
+             once: opts[:once]
+           ) do
+        :ok ->
+          :ok
 
-        true ->
-          engine = start_engine(config, engine_id)
+        {:ok, result} ->
+          print_reconcile_result(result)
 
-          case Cycle.Engine.Symphony.start_foreground(engine,
-                 workflow: opts.workflow,
-                 port: opts.port,
-                 dry_run: opts[:dry_run],
-                 allow_foreground_unattended: foreground_unattended?(config, engine_id),
-                 env: start_env(config)
-               ) do
-            {:ok, command} ->
-              puts(Enum.join(command, " "))
-
-            :ok ->
-              :ok
-
-            {:error, %{"message" => message, "code" => code}} ->
-              {:error, message, error_code(code)}
-          end
+        {:error, reason} ->
+          {:error, reconciler_error(reason), 2}
       end
     end
   end
 
-  defp start_engine(config, engine_id) do
-    registry_path = get_in(config.engines, ["registry_path"])
-    default = Cycle.EngineRegistry.default_record(config, engine_id)
+  defp print_reconcile_result(%Cycle.Reconciler.Result{} = result) do
+    puts("Cycle reconcile")
+    puts("  projects: #{length(result.discovery.records)}")
+    puts("  issues: #{length(result.issues)}")
+    puts("  decisions: #{length(result.decisions)}")
+    puts("  recorded: #{length(result.recorded)}")
+    puts("  dispatched: #{length(result.dispatched)}")
 
-    case Cycle.EngineRegistry.read(registry_path) do
-      {:ok, registry} -> Cycle.EngineRegistry.find(registry, engine_id) || default
-      {:error, _reason} -> default
-    end
+    Enum.each(result.engine_health, fn health ->
+      state = health["state"] || "unknown"
+      detail = health["reason"] || health["path"] || ""
+      puts("  engine: #{String.trim("#{state} #{detail}")}")
+    end)
   end
 
-  defp foreground_unattended?(config, engine_id) do
-    get_in(config.engines, ["managed", engine_id.name, "foreground_unattended"]) == true
-  end
+  defp reconciler_error({:auth, :missing_token, token_env}), do: "#{token_env} is not configured"
 
-  defp start_env(config) do
-    case get_in(config.linear, ["api_key_env"]) do
-      env_name when is_binary(env_name) and env_name != "" ->
-        if present?(config.secrets["linear_api_key"]),
-          do: %{env_name => config.secrets["linear_api_key"]},
-          else: %{}
+  defp reconciler_error({:http, status, _body}),
+    do: "Linear API request failed with status #{status}"
 
-      _ ->
-        %{}
-    end
-  end
+  defp reconciler_error({:transport, message}), do: "Linear API request failed: #{message}"
 
-  defp error_code("workflow_required"), do: 1
-  defp error_code("workflow_missing"), do: 1
-  defp error_code("engine_executable_missing"), do: 2
-  defp error_code("engine_exited"), do: 2
-  defp error_code(_code), do: 2
+  defp reconciler_error({:graphql, errors}),
+    do: "Linear API returned errors: #{Jason.encode!(errors)}"
+
+  defp reconciler_error({:decode, message}), do: "Linear API response decode failed: #{message}"
+  defp reconciler_error(reason), do: inspect(reason)
 
   defp service(["install"]), do: puts(service_install_text())
   defp service(["status" | rest]), do: service_status(rest)
@@ -505,7 +488,7 @@ defmodule Cycle.CLI do
 
   defp parse_options([arg | rest], opts, spec) do
     case Map.fetch(spec, arg) do
-      {:ok, key} when key in [:from_env, :print, :raw, :dry_run, :json] ->
+      {:ok, key} when key in [:from_env, :print, :raw, :dry_run, :no_dispatch, :once, :json] ->
         parse_options(rest, Map.put(opts, key, true), spec)
 
       {:ok, key} ->
