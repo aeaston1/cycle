@@ -294,7 +294,7 @@ Decisions:
 Acceptance Criteria:
 
 - `mise.toml` exists with pinned Erlang and Elixir versions.
-- `mix.exs` exists with app `:cycle`, version `0.1.0-dev`, escript config, and
+- `mix.exs` exists with app `:cycle`, version `0.1.0`, escript config, and
   minimal dependencies.
 - `lib/cycle/application.ex` starts a supervision tree with no external side
   effects by default.
@@ -372,7 +372,7 @@ Decisions:
 
 Acceptance Criteria:
 
-- `./bin/cycle --version` prints `cycle 0.1.0-dev`.
+- `./bin/cycle --version` prints `cycle 0.1.0`.
 - `./bin/cycle help` lists the documented commands.
 - Existing command names remain accepted.
 - Placeholder commands remain explicit where behavior is not implemented yet.

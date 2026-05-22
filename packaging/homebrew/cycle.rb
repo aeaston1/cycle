@@ -7,15 +7,14 @@
 class Cycle < Formula
   desc "Control plane for running OpenAI Symphony across Linear projects"
   homepage "https://github.com/OWNER/REPO"
-  url "https://github.com/OWNER/REPO/releases/download/vX.Y.Z/cycle-vX.Y.Z.tar.gz"
-  sha256 "REPLACE_WITH_RELEASE_SHA256"
+  url "https://github.com/OWNER/REPO/releases/download/v0.1.0/cycle-v0.1.0.tar.gz"
+  sha256 "43c49f850fc90948971569be65b248abe19c7824629ec1641ce28eb7a3ecb5e2"
   license "MIT"
-  version "X.Y.Z"
+  version "0.1.0"
 
   depends_on "codex"
   depends_on "erlang"
   depends_on "git"
-  depends_on "mise"
 
   uses_from_macos "curl"
 
@@ -26,7 +25,7 @@ class Cycle < Formula
   end
 
   test do
-    assert_match "cycle v#{version}", shell_output("#{bin}/cycle --version")
+    assert_match "cycle #{version}", shell_output("#{bin}/cycle --version")
     assert_match "Cycle doctor", shell_output("#{bin}/cycle doctor")
   end
 end

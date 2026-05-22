@@ -1,7 +1,7 @@
 defmodule Cycle.MixProject do
   use Mix.Project
 
-  @version System.get_env("CYCLE_VERSION", "0.1.0-dev") |> String.trim_leading("v")
+  @version System.get_env("CYCLE_VERSION", "0.1.0") |> String.trim_leading("v")
 
   def project do
     [

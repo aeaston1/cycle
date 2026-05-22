@@ -5,7 +5,7 @@ defmodule Cycle.CLITest do
   import ExUnit.CaptureIO
 
   test "prints the version" do
-    assert capture_io(fn -> assert Cycle.CLI.run(["--version"]) == :ok end) == "cycle 0.1.0-dev\n"
+    assert capture_io(fn -> assert Cycle.CLI.run(["--version"]) == :ok end) == "cycle 0.1.0\n"
   end
 
   test "prints help with documented commands" do
