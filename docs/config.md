@@ -76,7 +76,7 @@ projects:
 
 engines:
   registry_path: ${CYCLE_HOME}/engines.yaml
-  lock_path: ${CYCLE_HOME}/engines.lock
+  lock_path: ${CYCLE_HOME}/engines.lock.yaml
   default: openai-symphony@main
   install_root: ${CYCLE_HOME}/engines
   managed:
@@ -109,15 +109,6 @@ review_judge:
 
 policy:
   enforcement: report
-  required:
-    codex:
-      model: gpt-5.5
-      reasoning_effort: low
-      service_tier: fast
-    review_judge:
-      model: gpt-5.5
-      reasoning_effort: xhigh
-      service_tier: fast
   drift:
     report_in_status: true
     propagation: manual
@@ -131,11 +122,11 @@ service:
     path: ${CYCLE_HOME}/logs/cycle.log
 ```
 
-The current scaffold writes a minimal `config.yaml` from
-`cycle linear configure`. `foreground_unattended` is intentionally false by
-default; when true for a managed Symphony engine, `cycle start` may include the
-upstream no-guardrails flag for foreground operator testing. Full dispatch
-policy loading is planned behavior.
+`cycle linear configure` writes a minimal `config.yaml`. With `--from-env`, it
+stores `linear.api_key_env: LINEAR_API_KEY`; with `--api-key`, it stores the
+provided token directly in the operator config file with mode `0600`.
+`foreground_unattended` is intentionally false by default. Full dispatch policy
+profiles beyond the default global policy fields are roadmap behavior.
 
 Scheduler budget and rate-limit gates accept `mode: off`, `mode: warn`, or
 `mode: block`. When `pressure: true`, warn mode reports the pressure in
@@ -156,31 +147,32 @@ or does not provide a Linear API key. New commands should write `config.yaml`.
 
 ## Registry Files
 
-Planned registry files:
+Registry files:
 
 ```text
 ${CYCLE_HOME}/projects.yaml
 ${CYCLE_HOME}/engines.yaml
-${CYCLE_HOME}/engines.lock
+${CYCLE_HOME}/engines.lock.yaml
 ${CYCLE_HOME}/runs.yaml
 ```
 
-These files are local state. They should be inspectable by operators and safe to
-delete after stopping Cycle, though deletion may lose run history.
+These files are local state. They are inspectable by operators and safe to
+delete after stopping Cycle, though deletion may lose run history, engine
+records, discovered projects, and retry state.
 
 ## Precedence
 
-Recommended precedence:
+Implemented effective precedence, highest to lowest:
 
 1. CLI flags.
 2. Environment variables.
 3. Cycle config file.
-4. Legacy `config.env` compatibility file.
+4. Legacy `config.env` Linear auth compatibility.
 5. Repo-owned `WORKFLOW.md`.
 6. Built-in defaults.
 
-Cycle should document every value that affects dispatch, service behavior, or
-Linear writes.
+Effective load order is built-in defaults, repo-owned workflow defaults, config
+file, environment values, then CLI overrides.
 
 ## Global Policy
 
@@ -189,22 +181,22 @@ define defaults and requirements for settings such as Codex model, Codex
 reasoning effort, service tier, review judge model, judge reasoning effort,
 hard-review paths, labels, capacity ceilings, and allowed engines.
 
-Cycle should validate discovered project workflows against this policy and
-record drift in the project registry. Drift means a project workflow differs
-from the desired fleet setting, is missing a required setting, or references an
+Cycle validates discovered project workflows against this policy and records
+drift in the project registry. Drift means a project workflow differs from the
+desired fleet setting, is missing a required setting, or references an
 engine/policy profile that is not allowed by Cycle config.
 
-Policy enforcement modes:
+Policy enforcement modes are documented for operator intent:
 
-- `report`: show drift in `cycle status` and `cycle doctor`, but do not block
-  dispatch unless the workflow is invalid.
+- `report`: record drift and show persisted drift through `cycle status` and
+  `cycle policy drift`, but do not block dispatch unless the workflow is
+  invalid.
 - `block`: prevent dispatch for projects with required-policy drift.
 - `propagate`: prepare or apply workflow updates only through an explicit
   operator command or confirmation.
 
-The first public version should default to `report`. Propagation should be
-manual and should stage narrow repo changes, never silently rewrite project
-workflows during discovery.
+The first public version defaults to `report`. Propagation is manual and is
+never performed during discovery.
 
 `cycle policy drift` lists persisted drift records from the project registry.
 `cycle policy propagate --project PROJECT --dry-run` renders a proposed

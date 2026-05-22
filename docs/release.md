@@ -103,6 +103,20 @@ tests/smoke.sh
 ./bin/cycle project opt-in --repo https://github.com/OWNER/REPO.git
 ```
 
+Manual documentation checks before release:
+
+```sh
+./bin/cycle linear configure --print
+./bin/cycle service status
+./bin/cycle service install --dry-run
+./bin/cycle start --dry-run
+```
+
+The service install dry run requires configured Linear auth and an installed,
+healthy default engine. If those prerequisites are intentionally absent on the
+release machine, record the refusal message instead of forcing a service
+install.
+
 When Linear auth is configured:
 
 ```sh

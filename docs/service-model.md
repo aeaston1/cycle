@@ -1,7 +1,7 @@
 # Service Model
 
-Cycle should manage services only after explicit operator setup. The current
-scaffold must not stop, replace, or mutate an existing Symphony service.
+Cycle manages its service only after explicit operator setup. It must not stop,
+replace, or mutate an existing Symphony service.
 
 ## Commands
 
@@ -16,19 +16,18 @@ cycle status
 
 `cycle start` is for foreground operator testing.
 
-It should:
+Implemented behavior:
 
-- read Cycle config
-- load the project and engine registries
-- validate project workflows against global policy
-- report policy drift before dispatching work
-- start discovery and scheduling in the foreground
-- print logs to stdout/stderr
-- fail fast on invalid config
+- reads Cycle config
+- performs foreground discovery and scheduling
+- validates project workflows against global policy during discovery
+- records policy drift in the project registry
+- prints foreground logs and writes configured log events
+- fails fast on invalid config
 
-It should not install a background service.
+It does not install a background service.
 
-Useful foreground modes:
+Foreground modes:
 
 - `cycle start --dry-run` prints planned config, registry, polling, and dispatch behavior and exits.
 - `cycle start --once` runs one discovery and scheduler cycle and exits.
@@ -36,20 +35,20 @@ Useful foreground modes:
 
 ## `cycle service install`
 
-`cycle service install` should be explicit and conservative.
+`cycle service install` is explicit and conservative.
 
-It should:
+Implemented behavior:
 
-- show the service name and unit path before writing
-- show the Cycle config path and state path
 - verify required commands are available
 - verify Linear auth exists
 - verify the default engine is installed or explain how to install it
-- verify global policy can be parsed and policy enforcement mode is explicit
+- verify global policy can be parsed
 - write a service file for the current platform
-- enable the service only when the operator confirms or passes an explicit flag
+- enable the service only when the operator confirms or passes `--yes`
+- print the service file, env file, rendered service, and planned manager
+  commands in `--dry-run` mode
 
-It should not:
+It does not:
 
 - stop an existing Symphony service
 - overwrite unrelated service files
@@ -58,21 +57,22 @@ It should not:
 
 ## `cycle service status`
 
-`cycle service status` should be read-only.
+`cycle service status` is read-only.
 
-It should report:
+It reports:
 
 - service installed or missing
 - service active/inactive/failed
 - process id, if running
 - config path
 - state path
-- last log lines or log file path
+- log file path
 - API health, if enabled
 - engine health
-- policy drift summary
+- drift summary state
 
-It should not start or stop services.
+It does not start or stop services. Its implementation checks only non-mutating
+service manager commands; mutating verbs are blocked by tests.
 
 ## Platform Targets
 

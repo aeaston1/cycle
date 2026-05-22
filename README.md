@@ -17,12 +17,22 @@ brew install aeaston1/tap/cycle
 
 ```sh
 cycle doctor
-cycle linear configure
-cycle symphony install
+export LINEAR_API_KEY=lin_api_placeholder
+cycle linear configure --from-env
+cycle linear configure --print
 cycle project opt-in --repo https://github.com/OWNER/REPO.git
 cycle project discover
+cycle symphony install
+cycle start --dry-run
+cycle start --once --no-dispatch
 cycle status
 ```
+
+This path configures Linear auth from the environment, prints public-safe
+Linear project metadata, discovers opted-in projects, installs the default
+Symphony engine, performs a foreground dry run, and checks status. See
+`docs/operator-guide.md` for the complete install, first-run, service,
+troubleshooting, and migration guide.
 
 ## Commands
 
@@ -34,6 +44,7 @@ cycle status
 - `cycle project discover [--limit N] [--raw]`
 - `cycle policy drift [--json]`
 - `cycle policy propagate --project PROJECT --dry-run`
+- `cycle policy propagate --project PROJECT --apply [--allow-dirty]`
 - `cycle start`
 - `cycle status`
 - `cycle service install`
@@ -60,6 +71,7 @@ See `docs/metadata-spec.md`.
 ## Documentation
 
 - Architecture: `docs/architecture.md`
+- Operator guide: `docs/operator-guide.md`
 - Config: `docs/config.md`
 - Metadata: `docs/metadata-spec.md`
 - Workflow contract: `docs/workflow-contract.md`
