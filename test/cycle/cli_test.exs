@@ -428,55 +428,38 @@ defmodule Cycle.CLITest do
     assert Map.has_key?(decoded, "registries")
   end
 
-  test "start validates required workflow option" do
-    assert Cycle.CLI.run(["start"]) == {:error, "cycle start requires --workflow PATH", 1}
-  end
+  test "start fails clearly when Linear auth is missing before polling" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{config_home: config_home} ->
+      write_config!(config_home, "linear:\n  api_key_env: CYCLE_TEST_MISSING_LINEAR_KEY\n")
 
-  test "start dry-run renders exact managed engine command without executing it" do
-    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
-      install_path = fake_installed_engine(cycle_home)
-      workflow = Path.join(install_path, "elixir/WORKFLOW.md")
-
-      output =
-        capture_io(fn ->
-          assert Cycle.CLI.run(["start", "--workflow", workflow, "--port", "4765", "--dry-run"]) ==
-                   :ok
-        end)
-
-      assert String.trim(output) ==
-               Enum.join(
-                 [Path.join(install_path, "elixir/bin/symphony"), "--port", "4765", workflow],
-                 " "
-               )
+      without_linear_env(fn ->
+        assert Cycle.CLI.run(["start", "--once", "--no-dispatch"]) ==
+                 {:error, "CYCLE_TEST_MISSING_LINEAR_KEY is not configured", 2}
+      end)
     end)
   end
 
-  test "start dry-run includes no-guardrails flag only with operator-approved config" do
-    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{
-                                                        cycle_home: cycle_home,
-                                                        config_home: config_home
-                                                      } ->
-      install_path = fake_installed_engine(cycle_home)
-      workflow = Path.join(install_path, "elixir/WORKFLOW.md")
-      config_dir = Path.join(config_home, "cycle")
-      File.mkdir_p!(config_dir)
-
-      File.write!(
-        Path.join(config_dir, "config.yaml"),
-        """
-        engines:
-          managed:
-            openai-symphony:
-              foreground_unattended: true
-        """
-      )
-
+  test "start dry-run prints Cycle foreground plan without polling" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
       output =
         capture_io(fn ->
-          assert Cycle.CLI.run(["start", "--workflow", workflow, "--dry-run"]) == :ok
+          assert Cycle.CLI.run(["start", "--dry-run"]) == :ok
         end)
 
-      assert output =~ "--i-understand-that-this-will-be-running-without-the-usual-guardrails"
+      assert output =~ "cycle start dry-run"
+      assert output =~ "project registry: #{Path.join(cycle_home, "projects.yaml")}"
+      assert output =~ "run registry: #{Path.join(cycle_home, "runs.yaml")}"
+    end)
+  end
+
+  test "start parses once and no-dispatch flags" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{config_home: config_home} ->
+      write_config!(config_home, "linear:\n  api_key_env: CYCLE_TEST_MISSING_LINEAR_KEY\n")
+
+      without_linear_env(fn ->
+        assert Cycle.CLI.run(["start", "--once", "--no-dispatch"]) ==
+                 {:error, "CYCLE_TEST_MISSING_LINEAR_KEY is not configured", 2}
+      end)
     end)
   end
 
@@ -510,7 +493,10 @@ defmodule Cycle.CLITest do
 
   defp with_cycle_home(fun) do
     cycle_home =
-      Path.join(System.tmp_dir!(), "cycle-cli-home-#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-cli-home-#{System.unique_integer([:positive, :monotonic])}"
+      )
 
     previous_cycle_home = System.get_env("CYCLE_HOME")
 
@@ -524,9 +510,33 @@ defmodule Cycle.CLITest do
     end
   end
 
+  defp write_config!(config_home, content) do
+    config_dir = Path.join(config_home, "cycle")
+    File.mkdir_p!(config_dir)
+    File.write!(Path.join(config_dir, "config.yaml"), content)
+  end
+
+  defp without_linear_env(fun) do
+    previous_linear = System.get_env("LINEAR_API_KEY")
+    previous_missing = System.get_env("CYCLE_TEST_MISSING_LINEAR_KEY")
+
+    System.put_env("LINEAR_API_KEY", "")
+    System.delete_env("CYCLE_TEST_MISSING_LINEAR_KEY")
+
+    try do
+      fun.()
+    after
+      restore_env("LINEAR_API_KEY", previous_linear)
+      restore_env("CYCLE_TEST_MISSING_LINEAR_KEY", previous_missing)
+    end
+  end
+
   defp symphony_fixture_repo(opts \\ []) do
     root =
-      Path.join(System.tmp_dir!(), "cycle-symphony-fixture-#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-symphony-fixture-#{System.unique_integer([:positive, :monotonic])}"
+      )
 
     File.mkdir_p!(Path.join(root, "elixir/bin"))
     File.write!(Path.join(root, "README.md"), "# Symphony fixture\n")
@@ -572,16 +582,6 @@ defmodule Cycle.CLITest do
       },
       overrides
     )
-  end
-
-  defp fake_installed_engine(cycle_home) do
-    install_path = Path.join([cycle_home, "engines", "openai-symphony", "main"])
-    File.mkdir_p!(Path.join(install_path, "elixir/bin"))
-    File.write!(Path.join(install_path, "elixir/WORKFLOW.md"), "# Workflow\n")
-    bin = Path.join(install_path, "elixir/bin/symphony")
-    File.write!(bin, "#!/bin/sh\nexit 0\n")
-    File.chmod!(bin, 0o755)
-    install_path
   end
 
   defp git!(cwd, args) do
