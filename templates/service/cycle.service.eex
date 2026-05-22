@@ -1,0 +1,15 @@
+[Unit]
+Description=Cycle service
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=<%= @env_file_path %>
+ExecStart=<%= @executable_path %> start --config <%= @config_path %> --state <%= @state_path %>
+WorkingDirectory=<%= @state_path %>
+StandardOutput=append:<%= @log_path %>
+StandardError=append:<%= @log_path %>
+Restart=no
+
+[Install]
+WantedBy=default.target
