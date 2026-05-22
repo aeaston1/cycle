@@ -84,7 +84,7 @@ defmodule Cycle.Scheduler do
       global_capacity: Keyword.get(opts, :global_capacity),
       worker_host_capacity: Keyword.get(opts, :worker_host_capacity),
       worker_host: Keyword.get(opts, :worker_host),
-      budget_mode: Keyword.get(opts, :budget_mode, "warn"),
+      pressure: pressure_state(opts),
       now: Keyword.get(opts, :now),
       refresh_issue: Keyword.get(opts, :refresh_issue)
     }
@@ -237,7 +237,7 @@ defmodule Cycle.Scheduler do
     |> Enum.reduce({[], initial}, fn
       %Decision{status: :dispatch} = decision, {acc, usage} ->
         case capacity_decision(decision, usage, context) do
-          {:ok, next_usage} -> {[decision | acc], next_usage}
+          {:ok, next_decision, next_usage} -> {[next_decision | acc], next_usage}
           {:error, blocked_decision} -> {[blocked_decision | acc], usage}
         end
 
@@ -280,18 +280,107 @@ defmodule Cycle.Scheduler do
         {:error,
          queued(issue, "state_capacity_full", "project state capacity is full", %{}, engine)}
 
-      context.budget_mode == "block" ->
+      blocked_pressure = blocked_pressure(context.pressure) ->
         {:error,
          queued(
            issue,
-           "budget_rate_limited",
-           "budget or rate-limit policy blocks new runs",
-           %{},
+           "scheduler_pressure_blocked",
+           blocked_pressure["reason"],
+           %{"pressure" => blocked_pressure},
            engine
          )}
 
       true ->
-        {:ok, increment_usage(usage, decision, context)}
+        next_decision = annotate_pressure(decision, context.pressure)
+        {:ok, next_decision, increment_usage(usage, decision, context)}
+    end
+  end
+
+  def pressure_state(opts) do
+    scheduler = Keyword.get(opts, :scheduler, %{})
+
+    budget =
+      Keyword.get(opts, :budget) ||
+        Map.get(scheduler, "budget") ||
+        %{"mode" => Keyword.get(opts, :budget_mode, "warn")}
+
+    rate_limit =
+      Keyword.get(opts, :rate_limit) ||
+        Map.get(scheduler, "rate_limit") ||
+        Map.get(scheduler, "rate_limits") ||
+        %{"mode" => "warn"}
+
+    %{
+      "budget" => pressure_gate("budget", budget),
+      "rate_limit" =>
+        pressure_gate("rate_limit", rate_limit)
+        |> merge_observed_rate_limits(Keyword.get(opts, :rate_limit_observations, []))
+    }
+  end
+
+  defp pressure_gate(name, config) when is_map(config) do
+    mode = normalize_mode(config["mode"] || config[:mode] || "warn")
+    pressure? = truthy?(config["pressure"] || config[:pressure])
+    reason = config["reason"] || config[:reason] || default_pressure_reason(name, mode)
+
+    %{
+      "mode" => mode,
+      "pressure" => pressure?,
+      "status" => pressure_status(mode, pressure?),
+      "reason" => reason
+    }
+  end
+
+  defp pressure_gate(name, _config), do: pressure_gate(name, %{})
+
+  defp merge_observed_rate_limits(gate, observations) when is_list(observations) do
+    observed? =
+      Enum.any?(observations, fn observation ->
+        is_map(observation) and truthy?(observation["pressure"] || observation[:pressure])
+      end)
+
+    if observed? do
+      %{
+        gate
+        | "pressure" => true,
+          "status" => pressure_status(gate["mode"], true),
+          "reason" => observed_rate_limit_reason(observations, gate["reason"])
+      }
+    else
+      gate
+    end
+  end
+
+  defp merge_observed_rate_limits(gate, _observations), do: gate
+
+  defp observed_rate_limit_reason(observations, fallback) do
+    observations
+    |> Enum.find_value(fn observation ->
+      if is_map(observation), do: observation["reason"] || observation[:reason]
+    end)
+    |> Kernel.||(fallback)
+  end
+
+  defp blocked_pressure(pressure) do
+    Enum.find_value(["budget", "rate_limit"], fn name ->
+      gate = pressure[name]
+
+      if gate["status"] == "blocked" do
+        Map.put(gate, "gate", name)
+      end
+    end)
+  end
+
+  defp annotate_pressure(%Decision{} = decision, pressure) do
+    warnings =
+      pressure
+      |> Enum.filter(fn {_name, gate} -> gate["status"] == "warn" end)
+      |> Map.new()
+
+    if map_size(warnings) == 0 do
+      decision
+    else
+      put_in(decision.details[:pressure], warnings)
     end
   end
 
@@ -423,6 +512,22 @@ defmodule Cycle.Scheduler do
     do: match?({value, ""} when used >= value, Integer.parse(cap))
 
   defp cap_reached?(_used, _cap), do: false
+
+  defp normalize_mode(mode) when mode in ["off", "warn", "block"], do: mode
+  defp normalize_mode(mode) when mode in [:off, :warn, :block], do: Atom.to_string(mode)
+  defp normalize_mode(_mode), do: "warn"
+
+  defp pressure_status("off", _pressure?), do: "off"
+  defp pressure_status("block", true), do: "blocked"
+  defp pressure_status("warn", true), do: "warn"
+  defp pressure_status(_mode, _pressure?), do: "ok"
+
+  defp default_pressure_reason("budget", _mode), do: "budget pressure is configured"
+  defp default_pressure_reason("rate_limit", _mode), do: "rate-limit pressure is configured"
+  defp default_pressure_reason(name, _mode), do: "#{name} pressure is configured"
+
+  defp truthy?(value) when value in [true, "true", "1", 1], do: true
+  defp truthy?(_value), do: false
 
   defp run_state(%Run{} = run), do: run.state
   defp run_state(run) when is_map(run), do: run["state"] || run[:state]

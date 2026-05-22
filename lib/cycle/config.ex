@@ -169,7 +169,8 @@ defmodule Cycle.Config do
         "max_concurrent_runs" => 10,
         "max_retry_backoff_ms" => 300_000,
         "stale_run_timeout_ms" => 300_000,
-        "budget" => %{"mode" => "warn"}
+        "budget" => %{"mode" => "warn", "pressure" => false},
+        "rate_limit" => %{"mode" => "warn", "pressure" => false}
       },
       "review_judge" => %{
         "enabled" => false,

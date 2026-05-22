@@ -44,6 +44,8 @@ defmodule Cycle.Config.Validation do
       "scheduler.max_concurrent_runs",
       get_in(config.scheduler, ["max_concurrent_runs"])
     )
+    |> require_mode("scheduler.budget.mode", get_in(config.scheduler, ["budget", "mode"]))
+    |> require_mode("scheduler.rate_limit.mode", get_in(config.scheduler, ["rate_limit", "mode"]))
     |> require_positive_integer("service.api.port", get_in(config.service, ["api", "port"]))
     |> require_string("service.logs.path", get_in(config.service, ["logs", "path"]))
     |> then(fn
@@ -107,4 +109,9 @@ defmodule Cycle.Config.Validation do
 
   defp require_positive_integer(errors, path, _value),
     do: [%{path: path, reason: "must be a positive integer"} | errors]
+
+  defp require_mode(errors, _path, value) when value in ["off", "warn", "block"], do: errors
+
+  defp require_mode(errors, path, _value),
+    do: [%{path: path, reason: "must be one of: off, warn, block"} | errors]
 end
