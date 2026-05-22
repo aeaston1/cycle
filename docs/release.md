@@ -1,0 +1,115 @@
+# Release And Homebrew
+
+Cycle's public install path should be Homebrew:
+
+```sh
+brew install aeaston1/tap/cycle
+```
+
+The tap owner/name is intentionally fixed. The project repo owner/name should
+not be hardcoded into public docs or generated config outside release metadata.
+
+## Release Artifacts
+
+The first release can ship as a source archive containing:
+
+- `bin/cycle`
+- `README.md`
+- `docs/`
+- `packaging/homebrew/cycle.rb` as a draft formula reference
+- license file
+
+Later releases can add compiled binaries if Cycle gains a compiled daemon.
+
+## Versioning
+
+Use semantic versions:
+
+```text
+v0.1.0
+v0.2.0
+v1.0.0
+```
+
+Pre-1.0 releases may change internals, but CLI command names and config paths
+should stay stable once documented.
+
+## Homebrew Formula
+
+The production formula belongs in the tap repository:
+
+```text
+Formula/cycle.rb
+```
+
+The formula should:
+
+- point at a versioned Cycle release artifact
+- verify `sha256`
+- install `bin/cycle`
+- install documentation as package docs
+- depend on required runtime tools
+- avoid embedding secrets, local paths, or private repo names
+
+The formula should not install or start the Cycle service automatically. Service
+installation belongs behind `cycle service install`.
+
+## Release Flow
+
+1. Ensure working tree is clean.
+2. Run CLI smoke tests.
+3. Run automated tests.
+4. Create a versioned tag.
+5. Build release archive.
+6. Compute checksum.
+7. Publish release artifact.
+8. Update Homebrew tap formula URL and checksum.
+9. Test `brew install aeaston1/tap/cycle`.
+10. Test `cycle doctor`.
+
+## Required Tests Before Release
+
+Minimum first-release checks:
+
+```sh
+tests/smoke.sh
+./bin/cycle --version
+./bin/cycle help
+./bin/cycle doctor
+./bin/cycle symphony path
+./bin/cycle project opt-in --repo https://github.com/OWNER/REPO.git
+```
+
+When Linear auth is configured:
+
+```sh
+./bin/cycle linear configure --print
+./bin/cycle project discover --limit 5
+./bin/cycle status
+```
+
+The `project discover` command should not depend on non-standard tools that are
+absent on a normal Homebrew install.
+
+## Tap Update
+
+The tap update should be a separate commit in the Homebrew tap repo.
+
+Formula fields to update:
+
+- `url`
+- `sha256`
+- `version`, if not inferred from tag
+- dependencies, if runtime requirements changed
+
+## Rollback
+
+Rollback should be possible by:
+
+- restoring the previous tap formula commit
+- reinstalling a previous formula version if supported
+- pinning Cycle's engine registry to the prior Symphony engine version
+
+Cycle should keep engine version locks separate from the Homebrew package
+version so operators can upgrade the control plane without immediately changing
+the Symphony engine.

@@ -1,0 +1,30 @@
+# Cycle local state
+.cycle/
+cycle.local.*
+reference/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+secrets/
+config/local.*
+config/*.local.*
+config/*secret*
+config/*secrets*
+
+# Release output
+dist/
+build/
+*.tar.gz
+*.zip
+*.sha256
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
