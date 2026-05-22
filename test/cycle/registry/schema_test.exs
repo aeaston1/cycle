@@ -92,7 +92,7 @@ defmodule Cycle.Registry.SchemaTest do
              %{
                path: "$.runs[0].state",
                reason:
-                 "must be one of: queued, running, blocked, human_review, merging, done, failed, canceled"
+                 "must be one of: queued, running, retrying, judging, blocked, completed, failed, cancelled, stale"
              }
            ] = errors
   end
@@ -175,6 +175,7 @@ defmodule Cycle.Registry.SchemaTest do
       "issue" => %{"id" => "issue-id", "identifier" => "AEA-149"},
       "project" => %{"id" => "project-id", "name" => "Project"},
       "engine" => %{"id" => "symphony", "name" => "Symphony"},
+      "workflow_path" => "WORKFLOW.md",
       "workflow_hash" => "sha256:abc123",
       "workspace_path" => "/tmp/cycle/workspaces/AEA-149",
       "state" => "running",
