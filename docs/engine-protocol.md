@@ -5,7 +5,9 @@ between Cycle's control plane and a managed Symphony runner.
 
 The first implementation can be a pragmatic adapter around the upstream OpenAI
 Symphony CLI. The long-term shape should be an explicit request/status contract
-that can support multiple Symphony versions.
+that can support multiple Symphony versions. See
+[future-roadmap.md](future-roadmap.md) for the dashboard and versioned protocol
+roadmap beyond the v1 adapter.
 
 ## Responsibilities
 
