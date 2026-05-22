@@ -124,7 +124,7 @@ cycle service status
 cycle start --workflow <path-to-WORKFLOW.md>
 ```
 
-`cycle start` runs a managed Symphony engine in the foreground. It does not install a service. Service commands currently explain the planned backing behavior.
+`cycle start` runs a managed Symphony engine in the foreground. It does not install a service. `cycle service status` reports a read-only service snapshot; `cycle service install` still explains the planned backing behavior.
 
 ## Install
 

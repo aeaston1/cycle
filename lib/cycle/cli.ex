@@ -23,7 +23,7 @@ defmodule Cycle.CLI do
     cycle project opt-in --repo URL
     cycle project discover [--limit N] [--raw]
     cycle service install
-    cycle service status
+    cycle service status [--json]
 
   Environment:
     CYCLE_HOME        State directory. Defaults to ~/.local/share/cycle
@@ -411,7 +411,7 @@ defmodule Cycle.CLI do
   end
 
   defp service(["install"]), do: puts(service_install_text())
-  defp service(["status"]), do: puts(service_status_text())
+  defp service(["status" | rest]), do: service_status(rest)
   defp service([]), do: {:error, "missing service subcommand", 1}
   defp service([sub | _]), do: {:error, "unknown service subcommand: #{sub}", 1}
 
@@ -427,19 +427,43 @@ defmodule Cycle.CLI do
     """
   end
 
-  defp service_status_text do
-    """
-    Service status is not implemented yet.
+  defp service_status(args) do
+    with {:ok, opts} <- parse_options(args, %{}, %{"--json" => :json}) do
+      snapshot = Cycle.Service.Status.snapshot()
 
-    Use `cycle status` for the current local Cycle/Symphony status checks.
-    """
+      if opts[:json] do
+        puts(Jason.encode!(snapshot, pretty: true))
+      else
+        print_service_status(snapshot)
+      end
+    end
+  end
+
+  defp print_service_status(snapshot) do
+    service = snapshot["service"]
+
+    puts("Cycle service status")
+    puts("  service: #{service["name"]}")
+    puts("  manager: #{service["manager"]}")
+    puts("  installed: #{service["installed"]}")
+    puts("  state: #{service["state"]}")
+    puts("  pid: #{service["pid"] || "unknown"}")
+    puts("  service file: #{service["file_path"] || "unknown"}")
+    puts("  config: #{snapshot["config_path"]}")
+    puts("  state path: #{snapshot["state_path"]}")
+    puts("  logs: #{snapshot["logs"]}")
+    puts("  api: #{snapshot["api_health"]["state"]} #{snapshot["api_health"]["url"] || ""}")
+    puts("  engine: #{snapshot["engine_health"]["state"]} #{snapshot["engine_health"]["path"]}")
+    puts("  drift: #{snapshot["drift_summary"]["state"]}")
+
+    if service["guidance"], do: puts("  guidance: #{service["guidance"]}")
   end
 
   defp parse_options([], opts, _spec), do: {:ok, opts}
 
   defp parse_options([arg | rest], opts, spec) do
     case Map.fetch(spec, arg) do
-      {:ok, key} when key in [:from_env, :print, :raw, :dry_run] ->
+      {:ok, key} when key in [:from_env, :print, :raw, :dry_run, :json] ->
         parse_options(rest, Map.put(opts, key, true), spec)
 
       {:ok, key} ->
