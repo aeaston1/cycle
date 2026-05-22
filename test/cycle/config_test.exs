@@ -116,7 +116,7 @@ defmodule Cycle.ConfigTest do
 
         assert %{
                  path: "engines.managed.openai-symphony.repo",
-                 reason: "must be an http or https URL"
+                 reason: "must be a git repository URL or absolute path"
                } in errors
       end
     )
