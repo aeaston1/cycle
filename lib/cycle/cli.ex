@@ -283,7 +283,11 @@ defmodule Cycle.CLI do
 
       case Cycle.ProjectDiscovery.discover(client,
              limit: String.to_integer(opts.limit),
-             registry_path: config.projects["registry_path"]
+             registry_path: config.projects["registry_path"],
+             workflow_resolver: [
+               cache_root: config.projects["workflow_cache_path"],
+               local_checkout_roots: [File.cwd!()]
+             ]
            ) do
         {:ok, result} ->
           if opts[:raw],

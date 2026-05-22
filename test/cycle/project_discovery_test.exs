@@ -45,11 +45,18 @@ defmodule Cycle.ProjectDiscoveryTest do
       })
     ])
 
-    registry_path = Path.join(temp_root(), "projects.yaml")
+    root = temp_root()
+    registry_path = Path.join(root, "projects.yaml")
+    checkout_path = Path.join(root, "checkout")
+    write_workflow!(checkout_path, "ops/WORKFLOW.md")
 
     assert {:ok, result} =
              ProjectDiscovery.discover(client(name),
                registry_path: registry_path,
+               workflow_resolver: [
+                 cache_root: Path.join(root, "workflow-cache"),
+                 local_checkout_paths: [checkout_path]
+               ],
                now: now,
                limit: 50
              )
@@ -140,6 +147,13 @@ defmodule Cycle.ProjectDiscoveryTest do
 
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
+    root
+  end
+
+  defp write_workflow!(root, path) do
+    workflow_path = Path.join(root, path)
+    File.mkdir_p!(Path.dirname(workflow_path))
+    File.write!(workflow_path, "# Workflow\n")
     root
   end
 
