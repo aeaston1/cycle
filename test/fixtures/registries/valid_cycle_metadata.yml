@@ -1,0 +1,5 @@
+cycle:
+  repo: https://github.com/OWNER/REPO.git
+  branch: main
+  workflow: .cycle/workflow.yml
+  enabled: true

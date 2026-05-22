@@ -24,6 +24,7 @@ defmodule Cycle.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:plug, "~> 1.18", only: :test},
       {:req, "~> 0.5"},
       {:yaml_elixir, "~> 2.11"}
     ]

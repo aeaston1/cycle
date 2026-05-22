@@ -1,0 +1,10 @@
+version: 1
+name: cycle-fixture-workflow
+before_run:
+  - command -v git
+  - ./bin/cycle doctor
+  - tests/smoke.sh
+states:
+  queued: Todo
+  active: In Progress
+  review: Human Review

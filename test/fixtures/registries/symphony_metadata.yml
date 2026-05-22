@@ -1,0 +1,4 @@
+symphony:
+  repo: https://github.com/OWNER/REPO.git
+  workflow: .symphony/workflow.yml
+  enabled: true

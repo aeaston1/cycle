@@ -1,0 +1,5 @@
+cycle:
+  repo: not-a-git-url
+  workflow:
+    - .cycle/workflow.yml
+  enabled: definitely
