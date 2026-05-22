@@ -46,6 +46,10 @@ defmodule Cycle.ReconcilerTest do
 
       assert {:ok, runs} = RunStore.load(Path.join(cycle_home, "runs.yaml"))
       assert [%RunStore.Run{issue: %{"identifier" => "AEA-200"}, state: "queued"}] = runs.runs
+
+      assert {:ok, log_body} = File.read(Path.join([cycle_home, "logs", "cycle.log"]))
+      assert log_body =~ "engine health check failed"
+      assert log_body =~ "scheduler gate decision"
     end)
   end
 

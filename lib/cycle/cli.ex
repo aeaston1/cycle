@@ -347,6 +347,7 @@ defmodule Cycle.CLI do
     puts("Cycle status")
     puts("  config: #{snapshot["paths"]["config"]}")
     puts("  state:  #{snapshot["paths"]["state"]}")
+    puts("  logs:   #{snapshot["paths"]["logs"]}")
     puts("  engine: #{engine_health} at #{engine["install_path"]}")
 
     if get_in(engine, ["health", "reason"]) do
@@ -382,6 +383,10 @@ defmodule Cycle.CLI do
 
     Enum.each(snapshot["discovery"]["last_errors"], fn error ->
       puts("  discovery error: #{error["project"] || "unknown"}: #{error["error"]}")
+    end)
+
+    Enum.each(snapshot["last_errors"], fn error ->
+      puts("  last error: #{error["source"]}: #{error["summary"] || error["code"] || "unknown"}")
     end)
 
     api = snapshot["service"]["api"]
