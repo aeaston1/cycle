@@ -16,7 +16,7 @@ defmodule Cycle.Service.TemplateTest do
 
     assert rendered =~ "<plist version=\"1.0\">"
     assert rendered =~ "<string>/opt/cycle/bin/cycle</string>"
-    assert rendered =~ "<string>/home/operator/.config/cycle/config.yaml</string>"
+    assert rendered =~ "<string>/home/operator/.config</string>"
     assert rendered =~ "<string>/home/operator/.local/share/cycle</string>"
     assert rendered =~ "<string>/home/operator/.local/share/cycle/logs/cycle.log</string>"
     assert rendered =~ "<string>/home/operator/.config/cycle/cycle.env</string>"
@@ -29,8 +29,7 @@ defmodule Cycle.Service.TemplateTest do
     assert rendered =~ "[Unit]"
     assert rendered =~ "EnvironmentFile=/home/operator/.config/cycle/cycle.env"
 
-    assert rendered =~
-             "ExecStart=/opt/cycle/bin/cycle start --config /home/operator/.config/cycle/config.yaml --state /home/operator/.local/share/cycle"
+    assert rendered =~ "ExecStart=/opt/cycle/bin/cycle start"
 
     assert rendered =~
              "StandardOutput=append:/home/operator/.local/share/cycle/logs/cycle.log"
@@ -60,7 +59,7 @@ defmodule Cycle.Service.TemplateTest do
     assert {:ok, rendered} = Template.render(:systemd, fields, secrets: [secret])
     refute rendered =~ secret
 
-    leaking_fields = Map.put(fields, :config_path, secret)
+    leaking_fields = Map.put(fields, :env_file_path, secret)
 
     assert Template.render(:systemd, leaking_fields, secrets: [secret]) ==
              {:error, "rendered service template contains a secret value"}

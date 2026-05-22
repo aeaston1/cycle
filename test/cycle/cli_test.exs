@@ -660,11 +660,16 @@ defmodule Cycle.CLITest do
     end)
   end
 
-  test "service install placeholder remains explicit and service status reports safely" do
-    install_output = capture_io(fn -> assert Cycle.CLI.run(["service", "install"]) == :ok end)
+  test "service install accepts dry-run and service status reports safely" do
+    install_output =
+      capture_io(fn ->
+        assert {:error, message, _code} = Cycle.CLI.run(["service", "install", "--dry-run"])
+        assert is_binary(message)
+      end)
+
     status_output = capture_io(fn -> assert Cycle.CLI.run(["service", "status"]) == :ok end)
 
-    assert install_output =~ "Service installation is not implemented yet."
+    assert install_output == ""
     assert status_output =~ "Cycle service status"
     assert status_output =~ "installed:"
     assert status_output =~ "state:"
