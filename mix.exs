@@ -1,0 +1,38 @@
+defmodule Cycle.MixProject do
+  use Mix.Project
+
+  @version "0.1.0-dev"
+
+  def project do
+    [
+      app: :cycle,
+      version: @version,
+      elixir: "~> 1.19",
+      start_permanent: Mix.env() == :prod,
+      deps: deps(),
+      escript: escript()
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:logger],
+      mod: {Cycle.Application, []}
+    ]
+  end
+
+  defp deps do
+    [
+      {:jason, "~> 1.4"},
+      {:req, "~> 0.5"},
+      {:yaml_elixir, "~> 2.11"}
+    ]
+  end
+
+  defp escript do
+    [
+      main_module: Cycle.CLI,
+      name: "cycle"
+    ]
+  end
+end
