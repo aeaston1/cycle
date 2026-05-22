@@ -1,0 +1,165 @@
+defmodule Cycle.ConfigTest do
+  use ExUnit.Case, async: false
+
+  alias Cycle.Config
+
+  @home "/tmp/cycle-config-test-home"
+
+  test "missing config file falls back to safe defaults" do
+    assert {:ok, config} = Config.load(env: %{}, home: @home)
+
+    assert config.paths.config_file == "/tmp/cycle-config-test-home/.config/cycle/config.yaml"
+    assert config.paths.state_dir == "/tmp/cycle-config-test-home/.local/share/cycle"
+
+    assert config.projects["registry_path"] ==
+             "/tmp/cycle-config-test-home/.local/share/cycle/projects.yaml"
+
+    assert get_in(config.engines, ["managed", "openai-symphony", "repo"]) ==
+             "https://github.com/openai/symphony.git"
+  end
+
+  test "valid config YAML loads into typed structs and maps" do
+    with_temp_config(
+      """
+      polling:
+        interval_ms: 1000
+      projects:
+        registry_path: ${CYCLE_HOME}/custom-projects.yaml
+      engines:
+        managed:
+          openai-symphony:
+            repo: https://github.com/OWNER/REPO.git
+            default_ref: release
+      """,
+      fn config_path ->
+        env = %{"CYCLE_HOME" => "/tmp/cycle-state"}
+
+        assert {:ok, config} = Config.load(env: env, home: @home, config_path: config_path)
+        assert %Cycle.Config.Paths{} = config.paths
+        assert config.polling["interval_ms"] == 1000
+        assert config.projects["registry_path"] == "/tmp/cycle-state/custom-projects.yaml"
+        assert get_in(config.engines, ["managed", "openai-symphony", "default_ref"]) == "release"
+      end
+    )
+  end
+
+  test "environment overrides config file values" do
+    with_temp_config(
+      """
+      service:
+        status_url: http://from-config.example/state
+      engines:
+        managed:
+          openai-symphony:
+            repo: https://github.com/OWNER/CONFIG.git
+            default_ref: config-ref
+      """,
+      fn config_path ->
+        env = %{
+          "CYCLE_STATUS_URL" => "http://127.0.0.1:9999/state",
+          "CYCLE_SYMPHONY_REPO" => "https://github.com/OWNER/ENV.git",
+          "CYCLE_SYMPHONY_REF" => "env-ref"
+        }
+
+        assert {:ok, config} = Config.load(env: env, home: @home, config_path: config_path)
+        assert config.service["status_url"] == "http://127.0.0.1:9999/state"
+
+        assert get_in(config.engines, ["managed", "openai-symphony", "repo"]) ==
+                 "https://github.com/OWNER/ENV.git"
+
+        assert get_in(config.engines, ["managed", "openai-symphony", "default_ref"]) == "env-ref"
+      end
+    )
+  end
+
+  test "CLI overrides environment" do
+    env = %{"CYCLE_STATUS_URL" => "http://env.example/state"}
+    cli = %{"service" => %{"status_url" => "http://cli.example/state"}}
+
+    assert {:ok, config} = Config.load(env: env, home: @home, cli: cli)
+    assert config.service["status_url"] == "http://cli.example/state"
+  end
+
+  test "repo workflow defaults are lower precedence than config file" do
+    workflow = %{"polling" => %{"interval_ms" => 5000}}
+
+    with_temp_config("polling:\n  interval_ms: 1500\n", fn config_path ->
+      assert {:ok, config} =
+               Config.load(env: %{}, home: @home, workflow: workflow, config_path: config_path)
+
+      assert config.polling["interval_ms"] == 1500
+    end)
+  end
+
+  test "invalid YAML returns a structured error" do
+    with_temp_config("polling: [", fn config_path ->
+      assert {:error, [%{path: "config", reason: reason}]} =
+               Config.load(env: %{}, home: @home, config_path: config_path)
+
+      assert reason =~ "invalid YAML"
+    end)
+  end
+
+  test "invalid values return structured path and reason" do
+    with_temp_config(
+      """
+      polling:
+        interval_ms: nope
+      engines:
+        managed:
+          openai-symphony:
+            repo: not-a-url
+      """,
+      fn config_path ->
+        assert {:error, errors} = Config.load(env: %{}, home: @home, config_path: config_path)
+        assert %{path: "polling.interval_ms", reason: "must be a positive integer"} in errors
+
+        assert %{
+                 path: "engines.managed.openai-symphony.repo",
+                 reason: "must be an http or https URL"
+               } in errors
+      end
+    )
+  end
+
+  test "legacy config.env can supply LINEAR_API_KEY compatibility" do
+    root = temp_root()
+    config_home = Path.join(root, "xdg")
+    legacy_dir = Path.join(config_home, "cycle")
+    File.mkdir_p!(legacy_dir)
+    File.write!(Path.join(legacy_dir, "config.env"), "LINEAR_API_KEY=lin_secret\n")
+
+    try do
+      assert {:ok, config} = Config.load(env: %{"XDG_CONFIG_HOME" => config_home}, home: @home)
+      assert config.secrets["linear_api_key"] == "lin_secret"
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  test "redacted display never prints Linear API key in full" do
+    assert {:ok, config} =
+             Config.load(env: %{"LINEAR_API_KEY" => "lin_super_secret"}, home: @home)
+
+    display = Config.redacted(config)
+    assert get_in(display, [:secrets, "linear_api_key"]) == "[REDACTED]"
+    refute inspect(display) =~ "lin_super_secret"
+  end
+
+  defp with_temp_config(contents, fun) do
+    root = temp_root()
+    config_path = Path.join(root, "config.yaml")
+    File.mkdir_p!(root)
+    File.write!(config_path, contents)
+
+    try do
+      fun.(config_path)
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  defp temp_root do
+    Path.join(System.tmp_dir!(), "cycle-config-test-#{System.unique_integer([:positive])}")
+  end
+end

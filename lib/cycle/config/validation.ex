@@ -1,0 +1,89 @@
+defmodule Cycle.Config.Validation do
+  @moduledoc """
+  User-readable, machine-testable validation for Cycle config.
+  """
+
+  alias Cycle.Config
+
+  @type error :: %{path: String.t(), reason: String.t()}
+
+  @spec validate(Config.t()) :: {:ok, Config.t()} | {:error, [error()]}
+  def validate(%Config{} = config) do
+    []
+    |> require_string("paths.config_dir", config.paths.config_dir)
+    |> require_string("paths.config_file", config.paths.config_file)
+    |> require_string("paths.state_dir", config.paths.state_dir)
+    |> require_string("paths.logs_dir", config.paths.logs_dir)
+    |> require_string("paths.engines_dir", config.paths.engines_dir)
+    |> require_url("linear.endpoint", get_in(config.linear, ["endpoint"]))
+    |> require_string("linear.api_key_env", get_in(config.linear, ["api_key_env"]))
+    |> require_non_empty_list("linear.active_states", get_in(config.linear, ["active_states"]))
+    |> require_non_empty_list(
+      "linear.terminal_states",
+      get_in(config.linear, ["terminal_states"])
+    )
+    |> require_positive_integer("polling.interval_ms", get_in(config.polling, ["interval_ms"]))
+    |> require_string("projects.registry_path", get_in(config.projects, ["registry_path"]))
+    |> require_string(
+      "projects.workflow_cache_path",
+      get_in(config.projects, ["workflow_cache_path"])
+    )
+    |> require_string("engines.registry_path", get_in(config.engines, ["registry_path"]))
+    |> require_string("engines.lock_path", get_in(config.engines, ["lock_path"]))
+    |> require_string("engines.default", get_in(config.engines, ["default"]))
+    |> require_string("engines.install_root", get_in(config.engines, ["install_root"]))
+    |> require_url(
+      "engines.managed.openai-symphony.repo",
+      get_in(config.engines, ["managed", "openai-symphony", "repo"])
+    )
+    |> require_string(
+      "engines.managed.openai-symphony.default_ref",
+      get_in(config.engines, ["managed", "openai-symphony", "default_ref"])
+    )
+    |> require_positive_integer(
+      "scheduler.max_concurrent_runs",
+      get_in(config.scheduler, ["max_concurrent_runs"])
+    )
+    |> require_positive_integer("service.api.port", get_in(config.service, ["api", "port"]))
+    |> require_string("service.logs.path", get_in(config.service, ["logs", "path"]))
+    |> then(fn
+      [] -> {:ok, config}
+      errors -> {:error, Enum.reverse(errors)}
+    end)
+  end
+
+  defp require_string(errors, _path, value) when is_binary(value) and value != "", do: errors
+
+  defp require_string(errors, path, _value),
+    do: [%{path: path, reason: "must be a non-empty string"} | errors]
+
+  defp require_url(errors, path, value) when is_binary(value) do
+    uri = URI.parse(value)
+
+    if uri.scheme in ["http", "https"] and is_binary(uri.host) do
+      errors
+    else
+      [%{path: path, reason: "must be an http or https URL"} | errors]
+    end
+  end
+
+  defp require_url(errors, path, _value),
+    do: [%{path: path, reason: "must be an http or https URL"} | errors]
+
+  defp require_non_empty_list(errors, path, [_ | _] = values) do
+    if Enum.all?(values, &(is_binary(&1) and &1 != "")) do
+      errors
+    else
+      [%{path: path, reason: "must contain only non-empty strings"} | errors]
+    end
+  end
+
+  defp require_non_empty_list(errors, path, _value),
+    do: [%{path: path, reason: "must be a non-empty list"} | errors]
+
+  defp require_positive_integer(errors, _path, value) when is_integer(value) and value > 0,
+    do: errors
+
+  defp require_positive_integer(errors, path, _value),
+    do: [%{path: path, reason: "must be a positive integer"} | errors]
+end
