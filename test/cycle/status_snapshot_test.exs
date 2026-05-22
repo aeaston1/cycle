@@ -72,6 +72,12 @@ defmodule Cycle.StatusSnapshotTest do
       assert snapshot["runs"]["counts"]["judging"] == 1
       assert snapshot["runs"]["counts"]["completed"] == 1
       assert snapshot["runs"]["counts"]["failed"] == 1
+
+      assert %{
+               "retry" => %{"reason" => "engine_unhealthy"},
+               "last_event" => %{"reason_code" => "engine_unhealthy"}
+             } = Enum.find(snapshot["runs"]["details"], &(&1["state"] == "retrying"))
+
       assert snapshot["capacity"]["global"] == %{"used" => 2, "available" => 8, "limit" => 10}
       assert snapshot["capacity"]["projects"]["project-id"]["used"] == 1
       assert snapshot["capacity"]["engines"]["openai-symphony@main"]["limit"] == 3
@@ -207,6 +213,24 @@ defmodule Cycle.StatusSnapshotTest do
       },
       overrides
     )
+  end
+
+  defp run_record(id, "retrying") do
+    run_record(id, "queued")
+    |> Map.merge(%{
+      "state" => "retrying",
+      "retry" => %{
+        "attempt" => 2,
+        "max_attempts" => 3,
+        "next_retry_at" => "2026-05-22T12:10:00Z",
+        "reason" => "engine_unhealthy"
+      },
+      "last_event" => %{
+        "type" => "retry_scheduled",
+        "reason_code" => "engine_unhealthy",
+        "message" => "selected engine is not healthy"
+      }
+    })
   end
 
   defp run_record(id, state) do

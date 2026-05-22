@@ -343,7 +343,10 @@ defmodule Cycle.StatusSnapshot do
   defp redact_event(nil), do: nil
 
   defp redact_event(event) when is_map(event),
-    do: event |> Cycle.Log.redact() |> Map.take(["summary", "code", "reason", "reason_code"])
+    do:
+      event
+      |> Cycle.Log.redact()
+      |> Map.take(["summary", "code", "reason", "reason_code", "type", "message"])
 
   defp redact_event(_event), do: nil
 
