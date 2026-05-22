@@ -322,7 +322,20 @@ defmodule Cycle.CLITest do
         )
 
       File.mkdir_p!(Path.join(checkout_root, "OWNER/REPO"))
-      File.write!(Path.join(checkout_root, "OWNER/REPO/WORKFLOW.md"), "# Workflow\n")
+
+      File.write!(Path.join(checkout_root, "OWNER/REPO/WORKFLOW.md"), """
+      ---
+      agent:
+        max_concurrent_agents: 1
+      tracker:
+        active_states:
+          - Todo
+        terminal_states:
+          - Done
+      ---
+      # Workflow
+      """)
+
       on_exit(fn -> File.rm_rf!(checkout_root) end)
 
       output =
