@@ -19,6 +19,8 @@ defmodule Cycle.CLITest do
     assert output =~ "cycle symphony path"
     assert output =~ "cycle project opt-in"
     assert output =~ "cycle project discover"
+    assert output =~ "cycle policy drift"
+    assert output =~ "cycle policy propagate"
     assert output =~ "cycle start"
     assert output =~ "cycle status"
     assert output =~ "cycle service install"
@@ -402,6 +404,155 @@ defmodule Cycle.CLITest do
     end)
   end
 
+  test "policy drift lists persisted drift records by project" do
+    with_cycle_home(fn cycle_home ->
+      registry_path = Path.join(cycle_home, "projects.yaml")
+
+      assert :ok =
+               Cycle.Registry.Store.write(registry_path, %{
+                 "schema_version" => 1,
+                 "projects" => [
+                   project_record(%{
+                     "namespace" => "owner-repo",
+                     "status" => "drift",
+                     "policy_drift" => %{
+                       "status" => "drift",
+                       "records" => [
+                         %{
+                           "path" => "review_judge.policy",
+                           "desired" => "standard",
+                           "observed" => nil,
+                           "severity" => "info",
+                           "propagation_available" => true
+                         }
+                       ]
+                     }
+                   })
+                 ]
+               })
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["policy", "drift"]) == :ok
+        end)
+
+      assert output =~ "PROJECT\tWORKFLOW\tPATH\tOBSERVED\tDESIRED\tSEVERITY\tPROPAGATION"
+
+      assert output =~
+               "owner-repo\tWORKFLOW.md\treview_judge.policy\tmissing\tstandard\tinfo\tavailable"
+    end)
+  end
+
+  test "policy propagate dry-run prints a patch and does not mutate workflow" do
+    with_cycle_home(fn cycle_home ->
+      workflow_path =
+        write_policy_workflow!("""
+        ---
+        name: example
+        review_judge:
+          enabled: true
+        ---
+        # Workflow
+        """)
+
+      write_drift_registry!(cycle_home, workflow_path, [
+        %{
+          "path" => "review_judge.policy",
+          "desired" => "standard",
+          "observed" => nil,
+          "severity" => "info",
+          "propagation_available" => true
+        }
+      ])
+
+      original = File.read!(workflow_path)
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["policy", "propagate", "--project", "cycle", "--dry-run"]) == :ok
+        end)
+
+      assert output =~ "--- a/WORKFLOW.md"
+      assert output =~ "+  policy: standard"
+      assert File.read!(workflow_path) == original
+    end)
+  end
+
+  test "policy propagate dry-run patches capacity drift" do
+    with_cycle_home(fn cycle_home ->
+      workflow_path =
+        write_policy_workflow!("""
+        ---
+        name: example
+        agent:
+          max_turns: 8
+        ---
+        # Workflow
+        """)
+
+      write_drift_registry!(cycle_home, workflow_path, [
+        %{
+          "path" => "agent.max_concurrent_agents",
+          "desired" => 2,
+          "observed" => nil,
+          "severity" => "blocking",
+          "propagation_available" => true
+        }
+      ])
+
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["policy", "propagate", "--project", "cycle", "--dry-run"]) == :ok
+        end)
+
+      assert output =~ "+  max_concurrent_agents: 2"
+    end)
+  end
+
+  test "policy propagate apply refuses dirty git worktrees unless allowed" do
+    with_cycle_home(fn cycle_home ->
+      repo =
+        Path.join(System.tmp_dir!(), "cycle-policy-repo-#{System.unique_integer([:positive])}")
+
+      try do
+        File.mkdir_p!(repo)
+        git!(repo, ["init", "-b", "main"])
+        git!(repo, ["config", "user.email", "cycle-test@example.invalid"])
+        git!(repo, ["config", "user.name", "Cycle Test"])
+
+        workflow_path = Path.join(repo, "WORKFLOW.md")
+
+        File.write!(workflow_path, """
+        ---
+        name: example
+        review_judge:
+          enabled: true
+        ---
+        # Workflow
+        """)
+
+        git!(repo, ["add", "WORKFLOW.md"])
+        git!(repo, ["commit", "-m", "workflow"])
+        File.write!(Path.join(repo, "dirty.txt"), "dirty\n")
+
+        write_drift_registry!(cycle_home, workflow_path, [
+          %{
+            "path" => "review_judge.policy",
+            "desired" => "standard",
+            "observed" => nil,
+            "severity" => "info",
+            "propagation_available" => true
+          }
+        ])
+
+        assert Cycle.CLI.run(["policy", "propagate", "--project", "cycle", "--apply"]) ==
+                 {:error, "refusing to apply policy propagation in dirty worktree", 1}
+      after
+        File.rm_rf(repo)
+      end
+    end)
+  end
+
   test "status summarizes persisted review judge visibility" do
     with_cycle_home(fn cycle_home ->
       assert :ok =
@@ -629,6 +780,32 @@ defmodule Cycle.CLITest do
       },
       overrides
     )
+  end
+
+  defp write_policy_workflow!(content) do
+    root =
+      Path.join(System.tmp_dir!(), "cycle-policy-workflow-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(root)
+    path = Path.join(root, "WORKFLOW.md")
+    File.write!(path, content)
+    path
+  end
+
+  defp write_drift_registry!(cycle_home, workflow_path, drift_records) do
+    Cycle.Registry.Store.write(Path.join(cycle_home, "projects.yaml"), %{
+      "schema_version" => 1,
+      "projects" => [
+        project_record(%{
+          "status" => "drift",
+          "workflow" => %{
+            "path" => "WORKFLOW.md",
+            "resolved_path" => workflow_path
+          },
+          "policy_drift" => %{"status" => "drift", "records" => drift_records}
+        })
+      ]
+    })
   end
 
   defp git!(cwd, args) do

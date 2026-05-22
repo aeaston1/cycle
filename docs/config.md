@@ -206,6 +206,12 @@ The first public version should default to `report`. Propagation should be
 manual and should stage narrow repo changes, never silently rewrite project
 workflows during discovery.
 
+`cycle policy drift` lists persisted drift records from the project registry.
+`cycle policy propagate --project PROJECT --dry-run` renders a proposed
+workflow patch without changing files. Apply mode is explicit and refuses dirty
+project worktrees unless the operator passes the dirty-worktree override.
+Generated edits are limited to propagation-available workflow policy fields.
+
 ## Secrets
 
 Secrets should be read from environment variables or operator-owned config files

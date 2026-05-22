@@ -21,6 +21,8 @@ defmodule Cycle.CLI do
     cycle symphony path [--version REF]
     cycle project opt-in --repo URL
     cycle project discover [--limit N] [--raw]
+    cycle policy drift [--json]
+    cycle policy propagate --project PROJECT --dry-run
     cycle service install
     cycle service status [--json]
 
@@ -56,6 +58,7 @@ defmodule Cycle.CLI do
       ["linear" | rest] -> linear(rest)
       ["symphony" | rest] -> symphony(rest)
       ["project" | rest] -> project(rest)
+      ["policy" | rest] -> policy(rest)
       ["service" | rest] -> service(rest)
       [command | _] -> {:error, "unknown command: #{command}", 1}
     end
@@ -486,6 +489,136 @@ defmodule Cycle.CLI do
   defp reconciler_error({:decode, message}), do: "Linear API response decode failed: #{message}"
   defp reconciler_error(reason), do: inspect(reason)
 
+  defp policy(["drift" | rest]), do: policy_drift(rest)
+  defp policy(["propagate" | rest]), do: policy_propagate(rest)
+  defp policy([]), do: {:error, "missing policy subcommand", 1}
+  defp policy([sub | _]), do: {:error, "unknown policy subcommand: #{sub}", 1}
+
+  defp policy_drift(args) do
+    with {:ok, opts} <- parse_options(args, %{}, %{"--json" => :json}),
+         {:ok, config} <- Cycle.Config.load(),
+         {:ok, registry} <- load_project_registry(config.projects["registry_path"]) do
+      drifted =
+        Enum.filter(registry.projects, fn project ->
+          records = get_in(project.policy_drift || %{}, ["records"]) || []
+          records != []
+        end)
+
+      if opts[:json] do
+        drifted
+        |> Enum.map(&policy_drift_project_map/1)
+        |> Jason.encode!(pretty: true)
+        |> puts()
+      else
+        print_policy_drift(drifted)
+      end
+    end
+  end
+
+  defp policy_propagate(args) do
+    with {:ok, opts} <-
+           parse_options(args, %{}, %{
+             "--project" => :project,
+             "--dry-run" => :dry_run,
+             "--apply" => :apply,
+             "--allow-dirty" => :allow_dirty
+           }),
+         :ok <- require_policy_propagate_mode(opts),
+         :ok <- require_policy_project(opts),
+         {:ok, config} <- Cycle.Config.load(),
+         {:ok, registry} <- load_project_registry(config.projects["registry_path"]),
+         {:ok, project} <- find_policy_project(registry.projects, opts.project),
+         {:ok, patch} <- Cycle.PolicyPropagation.prepare(project) do
+      cond do
+        opts[:dry_run] ->
+          puts(patch.diff)
+
+        opts[:apply] ->
+          with :ok <- apply_policy_patch(patch, opts) do
+            puts("Updated #{patch.workflow_path}")
+          end
+      end
+    end
+  end
+
+  defp apply_policy_patch(patch, opts) do
+    case Cycle.PolicyPropagation.apply(patch, allow_dirty: opts[:allow_dirty]) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason, 1}
+    end
+  end
+
+  defp require_policy_propagate_mode(%{dry_run: true, apply: true}),
+    do: {:error, "choose only one of --dry-run or --apply", 1}
+
+  defp require_policy_propagate_mode(%{dry_run: true}), do: :ok
+  defp require_policy_propagate_mode(%{apply: true}), do: :ok
+
+  defp require_policy_propagate_mode(_opts),
+    do: {:error, "policy propagate requires --dry-run or --apply", 1}
+
+  defp require_policy_project(%{project: project}) when is_binary(project) and project != "",
+    do: :ok
+
+  defp require_policy_project(_opts),
+    do: {:error, "policy propagate requires --project PROJECT", 1}
+
+  defp find_policy_project(projects, selector) do
+    case Cycle.PolicyPropagation.find_project(projects, selector) do
+      nil -> {:error, "project not found in registry: #{selector}", 1}
+      project -> {:ok, project}
+    end
+  end
+
+  defp load_project_registry(registry_path) do
+    with {:ok, raw} <- Cycle.Registry.Store.read(registry_path, %{"projects" => []}),
+         raw <- Map.put_new(raw, "projects", []),
+         {:ok, registry} <- Cycle.ProjectRegistry.from_map(raw) do
+      {:ok, registry}
+    else
+      {:error, errors} when is_list(errors) -> {:error, format_config_errors(errors), 3}
+      {:error, reason} -> {:error, "cannot read project registry: #{inspect(reason)}", 2}
+    end
+  end
+
+  defp print_policy_drift([]), do: puts("No policy drift records found.")
+
+  defp print_policy_drift(projects) do
+    puts("PROJECT\tWORKFLOW\tPATH\tOBSERVED\tDESIRED\tSEVERITY\tPROPAGATION")
+
+    Enum.each(projects, fn project ->
+      Enum.each(get_in(project.policy_drift || %{}, ["records"]) || [], fn record ->
+        puts(
+          Enum.join(
+            [
+              project.namespace || "",
+              get_in(project.workflow || %{}, ["path"]) || "",
+              record["path"] || "",
+              format_value(record["observed"]),
+              format_value(record["desired"]),
+              record["severity"] || "",
+              if(record["propagation_available"], do: "available", else: "unavailable")
+            ],
+            "\t"
+          )
+        )
+      end)
+    end)
+  end
+
+  defp policy_drift_project_map(project) do
+    %{
+      "project" => project.namespace,
+      "linear_project" => project.linear_project,
+      "workflow" => project.workflow,
+      "policy_drift" => project.policy_drift
+    }
+  end
+
+  defp format_value(nil), do: "missing"
+  defp format_value(value) when is_binary(value), do: value
+  defp format_value(value), do: Jason.encode!(value)
+
   defp service(["install"]), do: puts(service_install_text())
   defp service(["status" | rest]), do: service_status(rest)
   defp service([]), do: {:error, "missing service subcommand", 1}
@@ -539,7 +672,18 @@ defmodule Cycle.CLI do
 
   defp parse_options([arg | rest], opts, spec) do
     case Map.fetch(spec, arg) do
-      {:ok, key} when key in [:from_env, :print, :raw, :dry_run, :no_dispatch, :once, :json] ->
+      {:ok, key}
+      when key in [
+             :from_env,
+             :print,
+             :raw,
+             :dry_run,
+             :no_dispatch,
+             :once,
+             :json,
+             :apply,
+             :allow_dirty
+           ] ->
         parse_options(rest, Map.put(opts, key, true), spec)
 
       {:ok, key} ->
@@ -560,6 +704,7 @@ defmodule Cycle.CLI do
   defp option_value_name(:state_url), do: "URL"
   defp option_value_name(:workflow), do: "path"
   defp option_value_name(:port), do: "port"
+  defp option_value_name(:project), do: "PROJECT"
   defp option_value_name(_), do: "value"
 
   defp require_command(command) do
