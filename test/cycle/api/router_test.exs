@@ -76,9 +76,12 @@ defmodule Cycle.API.RouterTest do
     assert list_response.status == 200
     assert [%{"id" => "run-1"}] = list_payload["runs"]
     refute inspect(list_payload) =~ "full private log body"
+    refute inspect(list_payload) =~ "9a8b7c6d5e4f3a2b"
 
     run_response = request(:get, "/api/v1/runs/run-1", config)
-    assert Jason.decode!(run_response.resp_body)["id"] == "run-1"
+    run_payload = Jason.decode!(run_response.resp_body)
+    assert run_payload["id"] == "run-1"
+    refute inspect(run_payload) =~ "9a8b7c6d5e4f3a2b"
   end
 
   test "GET /api/v1/runs/:id returns 404 for a missing run", %{config: config} do
@@ -163,7 +166,10 @@ defmodule Cycle.API.RouterTest do
           "state" => "running",
           "timestamps" => %{"created_at" => @t0, "updated_at" => @t0},
           "retry" => %{"attempt" => 0},
-          "last_event" => %{"summary" => "failed", "body" => "full private log body"},
+          "last_event" => %{
+            "summary" => "failed with lin_9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+            "body" => "full private log body"
+          },
           "evidence" => [%{"type" => "log", "path" => "/tmp/cycle/run-1.log"}]
         }
       ]

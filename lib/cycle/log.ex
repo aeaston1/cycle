@@ -5,12 +5,6 @@ defmodule Cycle.Log do
 
   require Logger
 
-  @tokenish_key ~r/(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret)/i
-  @bearer ~r/\bBearer\s+[A-Za-z0-9._~+\/=-]+/i
-  @basic ~r/\bBasic\s+[A-Za-z0-9._~+\/=-]+/i
-  @assignment ~r/\b([A-Za-z0-9_.-]*(?:token|secret|api[_-]?key)[A-Za-z0-9_.-]*)=([^\s]+)/i
-  @long_token ~r/\b(?=[A-Za-z0-9._~+=-]{32,}\b)(?=[A-Za-z0-9._~+=-]*[0-9])[A-Za-z0-9._~+=-]{32,}\b/
-
   @doc """
   Creates the configured log directory and stores the active log path.
   """
@@ -44,23 +38,7 @@ defmodule Cycle.Log do
     |> Map.put("summary", redact(summary))
   end
 
-  def redact(value) when is_map(value) do
-    Map.new(value, fn {key, nested} ->
-      if tokenish_key?(key), do: {key, "[REDACTED]"}, else: {key, redact(nested)}
-    end)
-  end
-
-  def redact(value) when is_list(value), do: Enum.map(value, &redact/1)
-
-  def redact(value) when is_binary(value) do
-    value
-    |> then(&Regex.replace(@bearer, &1, "Bearer [REDACTED]"))
-    |> then(&Regex.replace(@basic, &1, "Basic [REDACTED]"))
-    |> then(&Regex.replace(@assignment, &1, "\\1=[REDACTED]"))
-    |> then(&Regex.replace(@long_token, &1, "[REDACTED]"))
-  end
-
-  def redact(value), do: value
+  defdelegate redact(value), to: Cycle.Security
 
   defp append(path, level, message) do
     line =
@@ -79,6 +57,4 @@ defmodule Cycle.Log do
 
   defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
   defp stringify_keys(value), do: value
-
-  defp tokenish_key?(key), do: Regex.match?(@tokenish_key, to_string(key))
 end

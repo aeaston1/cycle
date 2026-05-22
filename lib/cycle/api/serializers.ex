@@ -128,7 +128,13 @@ defmodule Cycle.API.Serializers do
   end
 
   defp redact_event(nil), do: nil
-  defp redact_event(event) when is_map(event), do: Map.take(event, ["summary", "code", "reason"])
+
+  defp redact_event(event) when is_map(event) do
+    event
+    |> Map.take(["summary", "code", "reason"])
+    |> Cycle.Security.redact()
+  end
+
   defp redact_event(_event), do: nil
 
   defp log_evidence(evidence) do

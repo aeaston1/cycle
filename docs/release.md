@@ -29,6 +29,10 @@ The command writes `dist/cycle-v0.1.0.tar.gz` and
 `bin/cycle` in the archive is a packaged executable, not the source-tree
 development wrapper.
 
+The artifact task extracts the archive before writing the checksum and scans it
+for known fake secret values and private repository names. Any finding is a
+release blocker.
+
 Later releases can add compiled binaries if Cycle gains a compiled daemon.
 
 ## Versioning
@@ -71,7 +75,8 @@ installation belongs behind `cycle service install`.
 3. Run automated tests.
 4. Create a versioned tag.
 5. Build release archive with `mix release.artifact vX.Y.Z`.
-6. Read checksum from `dist/cycle-vX.Y.Z.tar.gz.sha256`.
+6. Confirm the artifact security scan passed and read checksum from
+   `dist/cycle-vX.Y.Z.tar.gz.sha256`.
 7. Publish release artifact.
 8. Update Homebrew tap formula URL and checksum.
 9. Test `brew install aeaston1/tap/cycle`.
