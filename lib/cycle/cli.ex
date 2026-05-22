@@ -181,45 +181,56 @@ defmodule Cycle.CLI do
          {:ok, engine_id} <- engine_id_for(config, opts.ref),
          :ok <- require_command("git") do
       target = Cycle.EngineRegistry.install_path(config, engine_id)
-      File.mkdir_p!(Path.dirname(target))
 
-      cond do
-        File.dir?(Path.join(target, ".git")) ->
-          puts("Symphony engine already exists: #{target}")
-          puts("Updating with git fetch and checkout...")
-
-          with :ok <- cmd("git", ["-C", target, "fetch", "--tags", "origin"], 2),
-               :ok <- cmd("git", ["-C", target, "checkout", opts.ref], 2) do
-            _ =
-              System.cmd("git", ["-C", target, "pull", "--ff-only", "origin", opts.ref],
-                stderr_to_stdout: true
-              )
-
-            verify_symphony_checkout(config, engine_id, target)
-          end
-
-        File.exists?(target) ->
-          {:error, "target exists but is not a git checkout: #{target}", 3}
-
-        true ->
-          puts("Cloning Symphony from #{opts.repo}")
-
-          with :ok <- cmd("git", ["clone", opts.repo, target], 2),
-               :ok <- cmd("git", ["-C", target, "checkout", opts.ref], 2) do
-            verify_symphony_checkout(config, engine_id, target)
-          end
+      with :ok <- validate_engine_target(config, target),
+           :ok <- install_or_update_symphony(target, opts.repo, opts.ref) do
+        verify_symphony_checkout(config, engine_id, target)
       end
     end
   end
 
+  defp install_or_update_symphony(target, repo, ref) do
+    cond do
+      File.dir?(Path.join(target, ".git")) ->
+        puts("Symphony engine already exists: #{target}")
+        puts("Updating with git fetch, checkout, and fast-forward pull...")
+
+        with :ok <- git(["-C", target, "fetch", "--tags", "origin"], "fetch Symphony engine"),
+             :ok <- git(["-C", target, "checkout", ref], "checkout Symphony ref"),
+             :ok <- fast_forward_branch(target, ref) do
+          :ok
+        end
+
+      File.exists?(target) ->
+        {:error, "target exists but is not a git checkout: #{target}", 3}
+
+      true ->
+        File.mkdir_p!(Path.dirname(target))
+        puts("Cloning Symphony from #{redact_url(repo)}")
+
+        with :ok <- git(["clone", repo, target], "clone Symphony engine"),
+             :ok <- git(["-C", target, "checkout", ref], "checkout Symphony ref") do
+          :ok
+        end
+    end
+  end
+
   defp verify_symphony_checkout(config, engine_id, target) do
-    if File.exists?(Path.join(target, "elixir/WORKFLOW.md")) do
-      with :ok <- record_engine_install(config, engine_id, target) do
-        puts("Symphony installed at: #{target}")
-        :ok
-      end
-    else
-      {:error, "installed Symphony checkout did not contain elixir/WORKFLOW.md", 3}
+    symphony_bin = Path.join(target, "elixir/bin/symphony")
+    workflow_path = Path.join(target, "elixir/WORKFLOW.md")
+
+    cond do
+      !File.exists?(workflow_path) ->
+        {:error, "installed Symphony checkout did not contain #{workflow_path}", 3}
+
+      !File.exists?(symphony_bin) ->
+        {:error, "installed Symphony checkout did not contain #{symphony_bin}", 3}
+
+      true ->
+        with :ok <- record_engine_install(config, engine_id, target) do
+          puts("Symphony installed at: #{target}")
+          :ok
+        end
     end
   end
 
@@ -556,11 +567,55 @@ defmodule Cycle.CLI do
       else: {:error, "--limit must be a positive integer", 1}
   end
 
-  defp cmd(command, args, error_code) do
-    case System.cmd(command, args, into: IO.stream(:stdio, :line), stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      {_output, _} -> {:error, "#{command} failed", error_code}
+  defp git(args, label) do
+    case System.cmd("git", args, stderr_to_stdout: true) do
+      {output, 0} ->
+        if String.trim(output) != "", do: puts(redact_url(output))
+        :ok
+
+      {output, _status} ->
+        sanitized = output |> redact_url() |> String.trim()
+        message = "external dependency failed: git #{label}"
+
+        if sanitized == "" do
+          {:error, message, 2}
+        else
+          {:error, "#{message}: #{sanitized}", 2}
+        end
     end
+  end
+
+  defp fast_forward_branch(target, ref) do
+    case System.cmd("git", ["-C", target, "symbolic-ref", "--short", "-q", "HEAD"],
+           stderr_to_stdout: true
+         ) do
+      {branch, 0} ->
+        if String.trim(branch) == ref do
+          git(["-C", target, "pull", "--ff-only", "origin", ref], "fast-forward Symphony engine")
+        else
+          :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_engine_target(config, target) do
+    install_root = get_in(config.engines, ["install_root"]) || config.paths.engines_dir
+    expanded_root = Path.expand(install_root)
+    expanded_target = Path.expand(target)
+
+    if expanded_target == expanded_root or
+         String.starts_with?(expanded_target, expanded_root <> "/") do
+      :ok
+    else
+      {:error, "refusing to install Symphony outside Cycle engine root: #{target}", 3}
+    end
+  end
+
+  defp redact_url(value) when is_binary(value) do
+    Regex.replace(~r{(https?://)[^/@\s]+@}i, value, "\\1[REDACTED]@")
   end
 
   defp cycle_home,
@@ -578,8 +633,22 @@ defmodule Cycle.CLI do
 
   defp engine_cli(repo, ref) do
     %{
-      "engines" => %{"managed" => %{"openai-symphony" => %{"repo" => repo, "default_ref" => ref}}}
+      "engines" => %{
+        "managed" => %{
+          "openai-symphony" => %{"repo" => strip_url_credentials(repo), "default_ref" => ref}
+        }
+      }
     }
+  end
+
+  defp strip_url_credentials(value) when is_binary(value) do
+    uri = URI.parse(value)
+
+    if uri.userinfo && uri.scheme in ["http", "https"] do
+      %{uri | userinfo: nil} |> URI.to_string()
+    else
+      value
+    end
   end
 
   defp default_engine_id(config) do

@@ -32,7 +32,7 @@ defmodule Cycle.Config.Validation do
     |> require_string("engines.lock_path", get_in(config.engines, ["lock_path"]))
     |> require_string("engines.default", get_in(config.engines, ["default"]))
     |> require_string("engines.install_root", get_in(config.engines, ["install_root"]))
-    |> require_url(
+    |> require_git_repository(
       "engines.managed.openai-symphony.repo",
       get_in(config.engines, ["managed", "openai-symphony", "repo"])
     )
@@ -69,6 +69,27 @@ defmodule Cycle.Config.Validation do
 
   defp require_url(errors, path, _value),
     do: [%{path: path, reason: "must be an http or https URL"} | errors]
+
+  defp require_git_repository(errors, path, value) when is_binary(value) do
+    uri = URI.parse(value)
+
+    cond do
+      uri.scheme in ["http", "https", "git", "ssh"] and is_binary(uri.host) ->
+        errors
+
+      uri.scheme == "file" and is_binary(uri.path) and uri.path != "" ->
+        errors
+
+      Path.type(value) == :absolute ->
+        errors
+
+      true ->
+        [%{path: path, reason: "must be a git repository URL or absolute path"} | errors]
+    end
+  end
+
+  defp require_git_repository(errors, path, _value),
+    do: [%{path: path, reason: "must be a git repository URL or absolute path"} | errors]
 
   defp require_non_empty_list(errors, path, [_ | _] = values) do
     if Enum.all?(values, &(is_binary(&1) and &1 != "")) do

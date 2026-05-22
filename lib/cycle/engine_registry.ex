@@ -207,8 +207,14 @@ defmodule Cycle.EngineRegistry do
       uri.scheme in ["http", "https", "git", "ssh"] and is_binary(uri.host) ->
         []
 
+      uri.scheme == "file" and is_binary(uri.path) and uri.path != "" ->
+        []
+
+      Path.type(source) == :absolute ->
+        []
+
       true ->
-        [Schema.error(path, "must be a git repository URL")]
+        [Schema.error(path, "must be a git repository URL or absolute path")]
     end
   end
 
