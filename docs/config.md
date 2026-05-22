@@ -40,7 +40,7 @@ See `.env.example` for a no-secrets template.
 
 ## Main Config File
 
-Planned path:
+Primary path:
 
 ```text
 ${XDG_CONFIG_HOME:-~/.config}/cycle/config.yaml
@@ -126,6 +126,21 @@ service:
     path: ${CYCLE_HOME}/logs/cycle.log
 ```
 
+The current scaffold writes a minimal `config.yaml` from
+`cycle linear configure`. Full schema validation and dispatch policy loading are
+planned behavior.
+
+## Legacy Config Compatibility
+
+The Bash scaffold used:
+
+```text
+${XDG_CONFIG_HOME:-~/.config}/cycle/config.env
+```
+
+Cycle may read this legacy file for compatibility when `config.yaml` is absent
+or does not provide a Linear API key. New commands should write `config.yaml`.
+
 ## Registry Files
 
 Planned registry files:
@@ -147,8 +162,9 @@ Recommended precedence:
 1. CLI flags.
 2. Environment variables.
 3. Cycle config file.
-4. Repo-owned `WORKFLOW.md`.
-5. Built-in defaults.
+4. Legacy `config.env` compatibility file.
+5. Repo-owned `WORKFLOW.md`.
+6. Built-in defaults.
 
 Cycle should document every value that affects dispatch, service behavior, or
 Linear writes.

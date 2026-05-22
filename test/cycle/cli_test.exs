@@ -1,5 +1,5 @@
 defmodule Cycle.CLITest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO
 
@@ -40,6 +40,34 @@ defmodule Cycle.CLITest do
 
     assert output =~ "config file:"
     refute output =~ System.get_env("LINEAR_API_KEY", "not-a-real-token")
+  end
+
+  test "linear configure writes config.yaml as the primary config file" do
+    config_parent =
+      Path.join(System.tmp_dir!(), "cycle-cli-test-#{System.unique_integer([:positive])}")
+
+    previous_config_home = System.get_env("XDG_CONFIG_HOME")
+    previous_linear_key = System.get_env("LINEAR_API_KEY")
+
+    System.put_env("XDG_CONFIG_HOME", config_parent)
+    System.put_env("LINEAR_API_KEY", "test-token")
+
+    on_exit(fn ->
+      restore_env("XDG_CONFIG_HOME", previous_config_home)
+      restore_env("LINEAR_API_KEY", previous_linear_key)
+      File.rm_rf(config_parent)
+    end)
+
+    output =
+      capture_io(fn ->
+        assert Cycle.CLI.run(["linear", "configure", "--from-env"]) == :ok
+      end)
+
+    config_file = Path.join([config_parent, "cycle", "config.yaml"])
+
+    assert output =~ "Saved Linear configuration to #{config_file}"
+    assert File.read!(config_file) == "linear:\n  api_key_env: LINEAR_API_KEY\n"
+    refute File.exists?(Path.join([config_parent, "cycle", "config.env"]))
   end
 
   test "symphony path prints the managed engine path" do
@@ -93,4 +121,7 @@ defmodule Cycle.CLITest do
   test "unknown commands return a user error" do
     assert Cycle.CLI.run(["wat"]) == {:error, "unknown command: wat", 1}
   end
+
+  defp restore_env(name, nil), do: System.delete_env(name)
+  defp restore_env(name, value), do: System.put_env(name, value)
 end
