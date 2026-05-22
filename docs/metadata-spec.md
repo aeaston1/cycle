@@ -5,7 +5,7 @@ description or content field.
 
 ## Discovery Rules
 
-Cycle should:
+Cycle does:
 
 1. List Linear projects visible to the configured Linear API token.
 2. Read each project's description and content.
@@ -27,7 +27,7 @@ cycle:
   repo: https://github.com/OWNER/REPO.git
 ```
 
-`repo` may omit `.git`; Cycle should normalize it to the canonical Git URL used
+`repo` may omit `.git`; Cycle normalizes it to the canonical Git URL used
 internally.
 
 ## Recommended Metadata
@@ -63,7 +63,7 @@ be validated consistently across projects.
 
 ## Validation
 
-Cycle should reject or mark invalid:
+Cycle rejects or marks invalid:
 
 - missing `enabled: true`
 - missing `repo`
@@ -72,17 +72,23 @@ Cycle should reject or mark invalid:
 - repo URLs with spaces or extra path components
 - blank workflow paths
 - non-positive capacity values
-- engine refs that are not installed or allowed by global config, unless the
-  operator has enabled lazy engine install
-- policy profiles that do not exist in Cycle config
-- workflow settings that violate blocking global policy
+- `engines` values that are not non-empty strings
+- `policy.review_judge` values that are not non-empty strings
+- metadata keys containing token, secret, password, or API key wording
+
+Roadmap validation:
+
+- checking engine refs against installed or allowed engines during metadata
+  parsing
+- checking policy profile names against operator config during metadata parsing
+- blocking workflow settings that violate blocking global policy
 
 Invalid projects should not block discovery for other projects. They should
 appear in `cycle project discover` and `cycle status` with a clear error.
 
 ## Registry Record
 
-Each valid discovered project should persist at least:
+Each valid discovered project persists at least:
 
 ```yaml
 id: linear-project-id
@@ -107,7 +113,7 @@ policy:
   drift: []
 ```
 
-When drift exists, the registry should store machine-readable entries with the
+When drift exists, the registry stores machine-readable entries with the
 setting path, desired value, observed value, severity, and whether propagation is
 available.
 
@@ -115,14 +121,15 @@ available.
 
 `cycle project opt-in --repo <url>` should print minimal valid metadata.
 
-`cycle project discover` should show both valid and invalid opted-in projects,
+`cycle project discover` shows both valid and invalid opted-in projects,
 including:
 
 - Linear project name
 - metadata namespace
 - repo URL
 - workflow path
-- selected or allowed engines
 - validation status
-- policy validation and drift summary
 - last error
+
+`cycle project discover --raw` prints normalized JSON records for details such
+as selected engines, workflow metadata, and policy drift.
