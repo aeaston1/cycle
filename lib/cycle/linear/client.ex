@@ -53,7 +53,8 @@ defmodule Cycle.Linear.Client do
     %__MODULE__{
       endpoint: get_in(config.linear, ["endpoint"]) || "https://api.linear.app/graphql",
       token: config.secrets["linear_api_key"] || System.get_env(token_env),
-      token_env: token_env
+      token_env: token_env,
+      req_options: Application.get_env(:cycle, :linear_req_options, [])
     }
   end
 

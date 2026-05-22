@@ -29,6 +29,9 @@ defmodule Cycle.CLI do
     CYCLE_HOME        State directory. Defaults to ~/.local/share/cycle
     XDG_CONFIG_HOME   Config parent. Defaults to ~/.config
     LINEAR_API_KEY    Linear API token used by discovery and Symphony workflows
+
+  Notes:
+    cycle project discover --raw prints normalized discovery records as JSON.
   """
 
   def usage, do: @usage
@@ -245,70 +248,53 @@ defmodule Cycle.CLI do
     with {:ok, opts} <-
            parse_options(args, %{limit: "50"}, %{"--limit" => :limit, "--raw" => :raw}),
          :ok <- validate_limit(opts.limit),
-         :ok <- require_linear_key(),
-         :ok <- require_command("curl") do
-      query =
-        "query CycleProjectDiscovery($first: Int!) { projects(first: $first) { nodes { id name slugId url description content } } }"
+         {:ok, config} <- load_config(),
+         :ok <- require_configured_linear_key(config) do
+      client = Cycle.Linear.Client.new(config)
 
-      variables = ~s({"first":#{opts.limit}})
-      body = Jason.encode!(%{query: query, variables: Jason.decode!(variables)})
-
-      case Req.post("https://api.linear.app/graphql",
-             headers: [{"authorization", linear_api_key()}, {"content-type", "application/json"}],
-             body: body
+      case Cycle.ProjectDiscovery.discover(client,
+             limit: String.to_integer(opts.limit),
+             registry_path: config.projects["registry_path"]
            ) do
-        {:ok, %{status: status, body: response}} when status in 200..299 ->
+        {:ok, result} ->
           if opts[:raw],
-            do: IO.puts(response_body(response)),
-            else: print_discovered_projects(response)
+            do: print_raw_discovery(result),
+            else: print_discovered_projects(result)
 
-        {:ok, %{status: status}} ->
-          {:error, "Linear API request failed with status #{status}", 2}
-
-        {:error, error} ->
-          {:error, "Linear API request failed: #{Exception.message(error)}", 2}
+        {:error, reason} ->
+          {:error, discovery_error(reason), 2}
       end
     end
   end
 
-  defp print_discovered_projects(response) do
-    payload = response_payload(response)
-
-    if payload["errors"] do
-      IO.puts(:stderr, Jason.encode!(payload["errors"], pretty: true))
-      {:error, "Linear API returned errors", 2}
+  defp print_discovered_projects(%Cycle.ProjectDiscovery.Result{records: records} = result) do
+    if records == [] do
+      puts("No opted-in Linear projects found.")
     else
-      matches =
-        payload
-        |> get_in(["data", "projects", "nodes"])
-        |> List.wrap()
-        |> Enum.flat_map(&project_metadata_row/1)
-
-      if matches == [] do
-        puts("No opted-in Linear projects found.")
-      else
-        puts("NAME\tSLUG\tREPO\tURL")
-        Enum.each(matches, fn row -> puts(Enum.join(row, "\t")) end)
-      end
+      puts("NAMESPACE\tNAME\tSLUG\tREPO\tWORKFLOW\tSTATUS\tLAST_ERROR")
+      Enum.each(records, fn record -> puts(Enum.join(project_row(record), "\t")) end)
+      puts("Wrote #{length(records)} project records to #{result.registry_path}")
     end
   end
 
-  defp response_payload(response) when is_map(response), do: response
-  defp response_payload(response) when is_binary(response), do: Jason.decode!(response)
-  defp response_body(response) when is_binary(response), do: response
-  defp response_body(response), do: Jason.encode!(response)
+  defp print_raw_discovery(%Cycle.ProjectDiscovery.Result{records: records}) do
+    records
+    |> Enum.map(&Cycle.ProjectRegistry.to_map(%Cycle.ProjectRegistry{projects: [&1]}))
+    |> Enum.map(&List.first(&1["projects"]))
+    |> Jason.encode!(pretty: true)
+    |> puts()
+  end
 
-  defp project_metadata_row(project) do
-    source =
-      Enum.join(Enum.filter([project["description"], project["content"]], &present?/1), "\n")
-
-    case Cycle.ProjectMetadata.parse(source, field: "description") do
-      {:ok, metadata} ->
-        [[project["name"], project["slugId"], metadata.repo_url, project["url"]]]
-
-      _ ->
-        []
-    end
+  defp project_row(record) do
+    [
+      record.metadata_namespace || record.namespace || "",
+      get_in(record.linear_project, ["name"]) || "",
+      get_in(record.linear_project, ["slug"]) || "",
+      get_in(record.repo || %{}, ["url"]) || "",
+      get_in(record.workflow || %{}, ["path"]) || "",
+      record.status || "",
+      record.error || ""
+    ]
   end
 
   defp status(args) do
@@ -489,9 +475,52 @@ defmodule Cycle.CLI do
       else: {:error, "missing required command: #{command}", 2}
   end
 
-  defp require_linear_key do
-    if present?(linear_api_key()), do: :ok, else: {:error, "LINEAR_API_KEY is not configured", 1}
+  defp require_configured_linear_key(%Cycle.Config{} = config) do
+    if present?(config.secrets["linear_api_key"]),
+      do: :ok,
+      else:
+        {:error,
+         "#{get_in(config.linear, ["api_key_env"]) || "LINEAR_API_KEY"} is not configured", 1}
   end
+
+  defp load_config do
+    case Cycle.Config.load() do
+      {:ok, config} -> {:ok, config}
+      {:error, errors} -> {:error, format_config_errors(errors), 1}
+    end
+  end
+
+  defp format_config_errors(errors) do
+    errors
+    |> Enum.map(fn %{path: path, reason: reason} -> "#{path}: #{reason}" end)
+    |> Enum.join("; ")
+  end
+
+  defp discovery_error({:auth, :missing_token, token_env}), do: "#{token_env} is not configured"
+
+  defp discovery_error({:http, status, _body}),
+    do: "Linear API request failed with status #{status}"
+
+  defp discovery_error({:transport, message}), do: "Linear API request failed: #{message}"
+
+  defp discovery_error({:graphql, errors}),
+    do: "Linear API returned errors: #{Jason.encode!(errors)}"
+
+  defp discovery_error({:decode, message}), do: "Linear API response decode failed: #{message}"
+
+  defp discovery_error({:rate_limit, status, _body}),
+    do: "Linear API request failed with status #{status}"
+
+  defp discovery_error({:encode_failed, message}),
+    do: "project registry encode failed: #{message}"
+
+  defp discovery_error({:mkdir_failed, path, reason}), do: "could not create #{path}: #{reason}"
+  defp discovery_error({:write_failed, path, reason}), do: "could not write #{path}: #{reason}"
+
+  defp discovery_error({:rename_failed, temp, path, reason}),
+    do: "could not replace #{path} from #{temp}: #{reason}"
+
+  defp discovery_error(reason), do: inspect(reason)
 
   defp validate_limit(limit) do
     if String.match?(to_string(limit), ~r/^[0-9]+$/),
