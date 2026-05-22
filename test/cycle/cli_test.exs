@@ -35,6 +35,28 @@ defmodule Cycle.CLITest do
     assert output =~ "state:"
   end
 
+  test "doctor reports existing Symphony service hints without mutating services" do
+    previous_runner = Application.get_env(:cycle, :migration_command_runner)
+
+    Application.put_env(:cycle, :migration_command_runner, fn
+      "systemctl", ["show", "symphony.service" | _rest], _opts ->
+        {"LoadState=loaded\nActiveState=active\nMainPID=4321\nFragmentPath=/etc/systemd/system/symphony.service\n",
+         0}
+    end)
+
+    try do
+      output = capture_io(fn -> assert Cycle.CLI.run(["doctor"]) == :ok end)
+
+      assert output =~ "symphony service: running via systemd"
+      assert output =~ "symphony pid: 4321"
+      assert output =~ "symphony service file: /etc/systemd/system/symphony.service"
+    after
+      if previous_runner,
+        do: Application.put_env(:cycle, :migration_command_runner, previous_runner),
+        else: Application.delete_env(:cycle, :migration_command_runner)
+    end
+  end
+
   test "linear configure print reports configuration without leaking tokens" do
     output =
       capture_io(fn ->
@@ -367,6 +389,7 @@ defmodule Cycle.CLITest do
     assert output =~ "Cycle status"
     assert output =~ "logs:"
     assert output =~ "api:"
+    assert output =~ "external symphony:"
   end
 
   test "status summarizes persisted policy drift" do

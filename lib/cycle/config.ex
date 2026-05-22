@@ -187,6 +187,7 @@ defmodule Cycle.Config do
       },
       "service" => %{
         "api" => %{"enabled" => true, "bind" => "127.0.0.1", "port" => 4765},
+        "external_symphony_status_url" => nil,
         "logs" => %{"path" => "${CYCLE_HOME}/logs/cycle.log"}
       },
       "secrets" => %{}
@@ -201,6 +202,10 @@ defmodule Cycle.Config do
     |> put_if_present(["paths", "logs_dir"], env_path(env, "CYCLE_HOME", "logs"))
     |> put_if_present(["paths", "engines_dir"], env_path(env, "CYCLE_HOME", "engines"))
     |> put_if_present(["service", "status_url"], Map.get(env, "CYCLE_STATUS_URL"))
+    |> put_if_present(
+      ["service", "external_symphony_status_url"],
+      Map.get(env, "CYCLE_EXTERNAL_SYMPHONY_STATUS_URL")
+    )
     |> put_if_present(
       ["engines", "managed", "openai-symphony", "repo"],
       Map.get(env, "CYCLE_SYMPHONY_REPO")

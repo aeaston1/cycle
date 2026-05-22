@@ -73,6 +73,11 @@ defmodule Cycle.CLI do
     key = linear_api_key()
     required = ["git", "codex", "mise"]
 
+    symphony_hint =
+      Cycle.Migration.detect_service(
+        Application.get_env(:cycle, :migration_command_runner, &System.cmd/3)
+      )
+
     puts("Cycle doctor")
     puts("  config: #{config_home()}")
     puts("  state:  #{cycle_home()}")
@@ -95,6 +100,17 @@ defmodule Cycle.CLI do
     if present?(key),
       do: puts("  ok:    LINEAR_API_KEY is configured"),
       else: puts("  warn:  LINEAR_API_KEY is not configured")
+
+    puts(
+      "  symphony service: #{symphony_hint["state"]} via #{symphony_hint["manager"] || "unknown"}"
+    )
+
+    if symphony_hint["pid"], do: puts("  symphony pid: #{symphony_hint["pid"]}")
+
+    if symphony_hint["file_path"],
+      do: puts("  symphony service file: #{symphony_hint["file_path"]}")
+
+    if symphony_hint["guidance"], do: puts("  symphony guidance: #{symphony_hint["guidance"]}")
 
     if failed, do: {:error, "doctor found missing required commands", 2}, else: :ok
   end
@@ -418,6 +434,16 @@ defmodule Cycle.CLI do
 
     api = snapshot["service"]["api"]
     puts("  api: #{api["state"]} at #{api["url"]}")
+
+    migration = snapshot["migration"]["api"]
+    hint = snapshot["migration"]["service_hint"]
+    puts("  external symphony: #{hint["state"]} via #{hint["manager"] || "unknown"}")
+
+    if migration["url"] do
+      puts("  external symphony api: #{migration["state"]} at #{migration["url"]}")
+    end
+
+    :ok
   end
 
   defp start(args) do

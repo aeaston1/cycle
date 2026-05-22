@@ -23,6 +23,7 @@ defmodule Cycle.StatusSnapshotTest do
                "engines",
                "last_errors",
                "linear",
+               "migration",
                "paths",
                "pressure",
                "projects",
@@ -140,6 +141,50 @@ defmodule Cycle.StatusSnapshotTest do
       assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "run"))
       assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "engine"))
       assert snapshot["service"]["api"]["state"] == "healthy"
+    end)
+  end
+
+  test "includes configured external Symphony status URL for migration comparison" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{config_home: config_home} ->
+      config_dir = Path.join(config_home, "cycle")
+      File.mkdir_p!(config_dir)
+
+      File.write!(
+        Path.join(config_dir, "config.yaml"),
+        """
+        service:
+          external_symphony_status_url: http://127.0.0.1:4764/api/v1/status
+        """
+      )
+
+      assert {:ok, snapshot} =
+               StatusSnapshot.build(
+                 api_get: fn
+                   "http://127.0.0.1:4764/api/v1/status", _opts -> {:ok, %{status: 200}}
+                   _url, _opts -> {:error, :closed}
+                 end,
+                 migration_opts: [
+                   service: %{
+                     "manager" => "systemd",
+                     "name" => "symphony.service",
+                     "state" => "running",
+                     "pid" => 4321,
+                     "file_path" => "/etc/systemd/system/symphony.service",
+                     "guidance" => nil
+                   }
+                 ],
+                 health_opts: [checked_at: @t0]
+               )
+
+      assert snapshot["migration"]["configured_status_url"] ==
+               "http://127.0.0.1:4764/api/v1/status"
+
+      assert snapshot["migration"]["api"] == %{
+               "state" => "healthy",
+               "url" => "http://127.0.0.1:4764/api/v1/status"
+             }
+
+      assert snapshot["migration"]["service_hint"]["state"] == "running"
     end)
   end
 

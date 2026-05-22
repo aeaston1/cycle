@@ -33,6 +33,8 @@ Useful foreground modes:
 - `cycle start --dry-run` prints planned config, registry, polling, and dispatch behavior and exits.
 - `cycle start --once` runs one discovery and scheduler cycle and exits.
 - `cycle start --no-dispatch` records scheduler decisions without launching an engine run.
+- `cycle start --once --no-dispatch` is the safe migration preflight: one
+  discovery and scheduling pass, no engine dispatch, and no service install.
 
 ## `cycle service install`
 
@@ -123,19 +125,33 @@ The daemon may expose a local API for status:
 During migration, Cycle should run beside existing Symphony until the operator
 switches over.
 
+See [Migrating From An Existing Symphony Service](migration.md) for the
+operator procedure.
+
 Safe migration sequence:
 
 1. Install Cycle CLI.
 2. Configure Linear auth.
 3. Install or pin Symphony engine.
 4. Run `cycle project discover`.
-5. Run `cycle start` in foreground with dry-run or no-dispatch mode.
+5. Run `cycle start --once --no-dispatch`.
 6. Review policy drift against existing project workflows.
 7. Optionally propagate approved workflow policy updates.
 8. Compare status with the existing Symphony service.
 9. Install Cycle service.
 10. Stop or disable the old Symphony service only when the operator explicitly
    chooses to switch.
+
+If the old Symphony service exposes a status endpoint, configure it with:
+
+```yaml
+service:
+  external_symphony_status_url: http://127.0.0.1:4764/api/v1/status
+```
+
+or with `CYCLE_EXTERNAL_SYMPHONY_STATUS_URL` for a shell session. `cycle status`
+shows the configured external URL and reachability without mutating the old
+service.
 
 ## Tests
 
