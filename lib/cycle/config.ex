@@ -160,7 +160,8 @@ defmodule Cycle.Config do
         "managed" => %{
           "openai-symphony" => %{
             "repo" => "https://github.com/openai/symphony.git",
-            "default_ref" => "main"
+            "default_ref" => "main",
+            "foreground_unattended" => false
           }
         }
       },
