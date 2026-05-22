@@ -62,11 +62,16 @@ The formula should:
 - verify `sha256`
 - install `bin/cycle`
 - install documentation as package docs
-- depend on required runtime tools
+- depend on the Erlang runtime required by the escript package
+- depend on required operator runtime tools such as `codex`, `git`, and `mise`
 - avoid embedding secrets, local paths, or private repo names
 
 The formula should not install or start the Cycle service automatically. Service
 installation belongs behind `cycle service install`.
+
+The checked-in `packaging/homebrew/cycle.rb` is a formula template. Keep
+placeholder `OWNER/REPO`, release URL, version, and checksum values until a
+matching public release artifact has been published.
 
 ## Release Flow
 
@@ -78,9 +83,11 @@ installation belongs behind `cycle service install`.
 6. Confirm the artifact security scan passed and read checksum from
    `dist/cycle-vX.Y.Z.tar.gz.sha256`.
 7. Publish release artifact.
-8. Update Homebrew tap formula URL and checksum.
+8. In a separate Homebrew tap repo commit, update the formula URL, version, and
+   checksum.
 9. Test `brew install aeaston1/tap/cycle`.
-10. Test `cycle doctor`.
+10. Test `cycle --version`.
+11. Test `cycle doctor`.
 
 ## Required Tests Before Release
 
@@ -117,10 +124,23 @@ The tap update should be a separate commit in the Homebrew tap repo.
 
 Formula fields to update:
 
+- `homepage`, if the public repository URL changed
 - `url`
 - `sha256`
 - `version`, if not inferred from tag
 - dependencies, if runtime requirements changed
+
+Use the release archive path directly:
+
+```ruby
+url "https://github.com/OWNER/REPO/releases/download/vX.Y.Z/cycle-vX.Y.Z.tar.gz"
+sha256 "SHA256_FROM_dist/cycle-vX.Y.Z.tar.gz.sha256"
+version "X.Y.Z"
+```
+
+Do not update the tap before the release artifact and checksum are available.
+Keep the tap commit separate from repository release-preparation commits so the
+install diff is easy to audit and rollback.
 
 ## Rollback
 
