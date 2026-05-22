@@ -13,6 +13,12 @@ defmodule Cycle.WorkflowPolicyTest do
                  In Progress: 1
                  Human Review: 2
                max_turns: 8
+             codex:
+               model: gpt-5.5
+               reasoning_effort: low
+               service_tier: fast
+             engine:
+               id: openai-symphony@main
              tracker:
                active_states:
                  - Todo
@@ -42,6 +48,8 @@ defmodule Cycle.WorkflowPolicyTest do
 
     assert policy.agent["max_concurrent_agents"] == 3
     assert policy.agent["max_turns"] == 8
+    assert policy.codex["model"] == "gpt-5.5"
+    assert policy.engine["id"] == "openai-symphony@main"
 
     assert policy.agent["max_concurrent_agents_by_state"] == %{
              "in_progress" => 1,

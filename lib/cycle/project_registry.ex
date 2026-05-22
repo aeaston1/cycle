@@ -21,7 +21,7 @@ defmodule Cycle.ProjectRegistry do
     "error",
     "policy_drift"
   ]
-  @statuses ["valid", "invalid", "active", "disabled", "error", "discovering"]
+  @statuses ["valid", "drift", "invalid", "active", "disabled", "error", "discovering"]
 
   defstruct schema_version: Schema.schema_version(), projects: [], extra: %{}
 

@@ -5,6 +5,7 @@ defmodule Cycle.ProjectDiscovery do
 
   alias Cycle.Linear.Client
   alias Cycle.Linear.Client.Project, as: LinearProject
+  alias Cycle.GlobalPolicy
   alias Cycle.ProjectMetadata
   alias Cycle.ProjectRegistry
   alias Cycle.ProjectRegistry.Project
@@ -25,9 +26,10 @@ defmodule Cycle.ProjectDiscovery do
     registry_path = Keyword.fetch!(opts, :registry_path)
     now = Keyword.get(opts, :now, DateTime.utc_now())
     workflow_opts = Keyword.get(opts, :workflow_resolver, [])
+    global_policy = Keyword.get(opts, :global_policy, %GlobalPolicy{})
 
     with {:ok, projects} <- Client.list_projects(client, page_size: page_size),
-         records <- normalize_projects(projects, now, workflow_opts),
+         records <- normalize_projects(projects, now, workflow_opts, global_policy),
          registry <- %ProjectRegistry{projects: records},
          :ok <- Store.write(registry_path, ProjectRegistry.to_map(registry)) do
       {:ok,
@@ -41,29 +43,37 @@ defmodule Cycle.ProjectDiscovery do
 
   def normalize_projects(projects, now \\ DateTime.utc_now(), workflow_opts \\ [])
       when is_list(projects) do
+    normalize_projects(projects, now, workflow_opts, %GlobalPolicy{})
+  end
+
+  def normalize_projects(projects, now, workflow_opts, %GlobalPolicy{} = global_policy)
+      when is_list(projects) do
     projects
-    |> Enum.map(&normalize_project(&1, now, workflow_opts))
+    |> Enum.map(&normalize_project(&1, now, workflow_opts, global_policy))
     |> Enum.reject(&is_nil/1)
   end
 
-  defp normalize_project(%LinearProject{} = project, now, workflow_opts) do
+  defp normalize_project(%LinearProject{} = project, now, workflow_opts, global_policy) do
     source = Enum.join(Enum.filter([project.description, project.content], &present?/1), "\n")
 
     case ProjectMetadata.parse(source, field: "description") do
-      {:ok, metadata} -> resolve_record(project, metadata, now, workflow_opts)
+      {:ok, metadata} -> resolve_record(project, metadata, now, workflow_opts, global_policy)
       :not_opted_in -> nil
       {:error, errors} -> invalid_record(project, errors, now)
     end
   end
 
-  defp resolve_record(project, metadata, now, workflow_opts) do
+  defp resolve_record(project, metadata, now, workflow_opts, global_policy) do
     repo = %{"url" => metadata.repo_url, "full_name" => metadata.repo_full_name}
 
     case WorkflowResolver.resolve(repo, metadata.workflow_path, workflow_opts) do
       {:ok, workflow} ->
         case WorkflowPolicy.parse(workflow.content) do
-          {:ok, policy} -> valid_record(project, metadata, workflow, policy, now)
-          {:error, errors} -> invalid_record(project, metadata, errors, now)
+          {:ok, policy} ->
+            classified_record(project, metadata, workflow, policy, global_policy, now)
+
+          {:error, errors} ->
+            invalid_record(project, metadata, errors, now)
         end
 
       {:error, reason} ->
@@ -71,7 +81,10 @@ defmodule Cycle.ProjectDiscovery do
     end
   end
 
-  defp valid_record(project, metadata, workflow, policy, now) do
+  defp classified_record(project, metadata, workflow, policy, global_policy, now) do
+    validation = GlobalPolicy.classify(global_policy, policy)
+    drift_records = Enum.map(validation.drift, &Cycle.PolicyDrift.to_map/1)
+
     %Project{
       linear_project: linear_project(project),
       namespace: metadata.source.namespace,
@@ -90,9 +103,12 @@ defmodule Cycle.ProjectDiscovery do
       capacity: metadata.capacity,
       last_discovery_at: DateTime.to_iso8601(now),
       last_discovered_at: DateTime.to_iso8601(now),
-      status: "valid",
+      status: validation.status,
       error: nil,
-      policy_drift: %{}
+      policy_drift: %{
+        "status" => validation.status,
+        "records" => drift_records
+      }
     }
   end
 
@@ -148,6 +164,8 @@ defmodule Cycle.ProjectDiscovery do
   defp policy_to_map(%WorkflowPolicy{} = policy) do
     %{
       "agent" => policy.agent,
+      "codex" => policy.codex,
+      "engine" => policy.engine,
       "tracker" => policy.tracker,
       "review_judge" => policy.review_judge,
       "worker" => policy.worker,
