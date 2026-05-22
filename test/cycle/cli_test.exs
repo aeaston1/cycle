@@ -361,11 +361,12 @@ defmodule Cycle.CLITest do
   test "status is accepted without a running Symphony service" do
     output =
       capture_io(fn ->
-        assert Cycle.CLI.run(["status", "--state-url", "http://127.0.0.1:9"]) == :ok
+        assert Cycle.CLI.run(["status"]) == :ok
       end)
 
     assert output =~ "Cycle status"
-    assert output =~ "symphony:"
+    assert output =~ "logs:"
+    assert output =~ "api:"
   end
 
   test "status summarizes persisted policy drift" do
@@ -396,7 +397,7 @@ defmodule Cycle.CLITest do
 
       output =
         capture_io(fn ->
-          assert Cycle.CLI.run(["status", "--state-url", "http://127.0.0.1:9"]) == :ok
+          assert Cycle.CLI.run(["status"]) == :ok
         end)
 
       assert output =~ "policy drift: 1 records across 1 projects"
@@ -552,55 +553,110 @@ defmodule Cycle.CLITest do
     end)
   end
 
-  test "start validates required workflow option" do
-    assert Cycle.CLI.run(["start"]) == {:error, "cycle start requires --workflow PATH", 1}
-  end
-
-  test "start dry-run renders exact managed engine command without executing it" do
-    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
-      install_path = fake_installed_engine(cycle_home)
-      workflow = Path.join(install_path, "elixir/WORKFLOW.md")
+  test "status summarizes persisted review judge visibility" do
+    with_cycle_home(fn cycle_home ->
+      assert :ok =
+               Cycle.Registry.Store.write(Path.join(cycle_home, "review_judge.yaml"), %{
+                 "schema_version" => 1,
+                 "records" => [
+                   %{
+                     "id" => "judge-AEA-170",
+                     "issue" => %{"id" => "issue-id", "identifier" => "AEA-170"},
+                     "project" => %{"id" => "project-id", "name" => "Cycle"},
+                     "status" => "written",
+                     "decision" => "require_human_review",
+                     "hard_stops" => [%{"code" => "sensitive_surface"}],
+                     "timestamps" => %{"updated_at" => "2026-05-22T12:00:00Z"}
+                   },
+                   %{
+                     "id" => "duplicate-AEA-171",
+                     "issue" => %{"id" => "issue-2", "identifier" => "AEA-171"},
+                     "project" => %{"id" => "project-id", "name" => "Cycle"},
+                     "status" => "skipped",
+                     "reason_code" => "duplicate_evidence_hash",
+                     "timestamps" => %{"updated_at" => "2026-05-22T12:00:00Z"}
+                   },
+                   %{
+                     "id" => "failed-AEA-172",
+                     "issue" => %{"id" => "issue-3", "identifier" => "AEA-172"},
+                     "project" => %{"id" => "project-id", "name" => "Cycle"},
+                     "status" => "failed",
+                     "reason_code" => "linear_write_failed",
+                     "timestamps" => %{"updated_at" => "2026-05-22T12:00:00Z"}
+                   }
+                 ]
+               })
 
       output =
         capture_io(fn ->
-          assert Cycle.CLI.run(["start", "--workflow", workflow, "--port", "4765", "--dry-run"]) ==
-                   :ok
+          assert Cycle.CLI.run(["status"]) == :ok
         end)
 
-      assert String.trim(output) ==
-               Enum.join(
-                 [Path.join(install_path, "elixir/bin/symphony"), "--port", "4765", workflow],
-                 " "
-               )
+      assert output =~ "review judge: 0 queued, 0 active, 1 duplicate skips, 1 route failures"
+      assert output =~ "review decision: AEA-170 require_human_review"
+      assert output =~ "hard review: sensitive_surface 1"
     end)
   end
 
-  test "start dry-run includes no-guardrails flag only with operator-approved config" do
-    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{
-                                                        cycle_home: cycle_home,
-                                                        config_home: config_home
-                                                      } ->
-      install_path = fake_installed_engine(cycle_home)
-      workflow = Path.join(install_path, "elixir/WORKFLOW.md")
-      config_dir = Path.join(config_home, "cycle")
-      File.mkdir_p!(config_dir)
+  test "status reports invalid registry errors" do
+    with_cycle_home(fn cycle_home ->
+      File.mkdir_p!(cycle_home)
 
       File.write!(
-        Path.join(config_dir, "config.yaml"),
-        """
-        engines:
-          managed:
-            openai-symphony:
-              foreground_unattended: true
-        """
+        Path.join(cycle_home, "projects.yaml"),
+        "schema_version: 1\nprojects:\n  - status: no-such-status\n"
       )
 
       output =
         capture_io(fn ->
-          assert Cycle.CLI.run(["start", "--workflow", workflow, "--dry-run"]) == :ok
+          assert Cycle.CLI.run(["status"]) == :ok
         end)
 
-      assert output =~ "--i-understand-that-this-will-be-running-without-the-usual-guardrails"
+      assert output =~ "registry error: projects"
+      assert output =~ "$.projects[0].status"
+      assert output =~ "must be one of"
+    end)
+  end
+
+  test "status supports json output" do
+    output = capture_io(fn -> assert Cycle.CLI.run(["status", "--json"]) == :ok end)
+    decoded = Jason.decode!(output)
+    assert decoded["schema"] == "cycle.status_snapshot.v1"
+    assert Map.has_key?(decoded, "registries")
+  end
+
+  test "start fails clearly when Linear auth is missing before polling" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{config_home: config_home} ->
+      write_config!(config_home, "linear:\n  api_key_env: CYCLE_TEST_MISSING_LINEAR_KEY\n")
+
+      without_linear_env(fn ->
+        assert Cycle.CLI.run(["start", "--once", "--no-dispatch"]) ==
+                 {:error, "CYCLE_TEST_MISSING_LINEAR_KEY is not configured", 2}
+      end)
+    end)
+  end
+
+  test "start dry-run prints Cycle foreground plan without polling" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      output =
+        capture_io(fn ->
+          assert Cycle.CLI.run(["start", "--dry-run"]) == :ok
+        end)
+
+      assert output =~ "cycle start dry-run"
+      assert output =~ "project registry: #{Path.join(cycle_home, "projects.yaml")}"
+      assert output =~ "run registry: #{Path.join(cycle_home, "runs.yaml")}"
+    end)
+  end
+
+  test "start parses once and no-dispatch flags" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{config_home: config_home} ->
+      write_config!(config_home, "linear:\n  api_key_env: CYCLE_TEST_MISSING_LINEAR_KEY\n")
+
+      without_linear_env(fn ->
+        assert Cycle.CLI.run(["start", "--once", "--no-dispatch"]) ==
+                 {:error, "CYCLE_TEST_MISSING_LINEAR_KEY is not configured", 2}
+      end)
     end)
   end
 
@@ -634,7 +690,10 @@ defmodule Cycle.CLITest do
 
   defp with_cycle_home(fun) do
     cycle_home =
-      Path.join(System.tmp_dir!(), "cycle-cli-home-#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-cli-home-#{System.unique_integer([:positive, :monotonic])}"
+      )
 
     previous_cycle_home = System.get_env("CYCLE_HOME")
 
@@ -648,10 +707,35 @@ defmodule Cycle.CLITest do
     end
   end
 
+  defp write_config!(config_home, content) do
+    config_dir = Path.join(config_home, "cycle")
+    File.mkdir_p!(config_dir)
+    File.write!(Path.join(config_dir, "config.yaml"), content)
+  end
+
+  defp without_linear_env(fun) do
+    previous_linear = System.get_env("LINEAR_API_KEY")
+    previous_missing = System.get_env("CYCLE_TEST_MISSING_LINEAR_KEY")
+
+    System.put_env("LINEAR_API_KEY", "")
+    System.delete_env("CYCLE_TEST_MISSING_LINEAR_KEY")
+
+    try do
+      fun.()
+    after
+      restore_env("LINEAR_API_KEY", previous_linear)
+      restore_env("CYCLE_TEST_MISSING_LINEAR_KEY", previous_missing)
+    end
+  end
+
   defp symphony_fixture_repo(opts \\ []) do
     root =
-      Path.join(System.tmp_dir!(), "cycle-symphony-fixture-#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-symphony-fixture-#{System.unique_integer([:positive, :monotonic])}"
+      )
 
+    File.rm_rf!(root)
     File.mkdir_p!(Path.join(root, "elixir/bin"))
     File.write!(Path.join(root, "README.md"), "# Symphony fixture\n")
 
@@ -722,16 +806,6 @@ defmodule Cycle.CLITest do
         })
       ]
     })
-  end
-
-  defp fake_installed_engine(cycle_home) do
-    install_path = Path.join([cycle_home, "engines", "openai-symphony", "main"])
-    File.mkdir_p!(Path.join(install_path, "elixir/bin"))
-    File.write!(Path.join(install_path, "elixir/WORKFLOW.md"), "# Workflow\n")
-    bin = Path.join(install_path, "elixir/bin/symphony")
-    File.write!(bin, "#!/bin/sh\nexit 0\n")
-    File.chmod!(bin, 0o755)
-    install_path
   end
 
   defp git!(cwd, args) do

@@ -59,9 +59,9 @@ When Cycle dispatches a run, the selected Symphony engine needs:
 - sandbox and approval policy
 - any run-specific metadata Cycle wants returned in status
 
-Until upstream Symphony has a stable external run protocol, Cycle may start a
-managed Symphony process with a workflow path and rely on the adapted behavior as
-the reference.
+Until upstream Symphony has a stable external run protocol, Cycle records queued
+or blocked scheduler decisions and dispatches only through an adapter capability
+that explicitly advertises single-issue dispatch support.
 
 ## Project Workflow Lookup
 

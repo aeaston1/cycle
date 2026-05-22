@@ -6,7 +6,6 @@ defmodule Cycle.CLI do
   @version System.get_env("CYCLE_VERSION") || Mix.Project.config()[:version]
   @default_symphony_repo "https://github.com/openai/symphony.git"
   @default_symphony_ref "main"
-  @default_state_url "http://127.0.0.1:4000/api/v1/state"
 
   @usage """
   Cycle manages OpenAI Symphony engines across Linear projects.
@@ -15,8 +14,8 @@ defmodule Cycle.CLI do
     cycle --version
     cycle help
     cycle doctor
-    cycle status [--state-url URL]
-    cycle start --workflow PATH [--port PORT] [--version REF] [--dry-run]
+    cycle status [--json]
+    cycle start [--dry-run] [--no-dispatch] [--once]
     cycle linear configure [--from-env | --api-key TOKEN | --print]
     cycle symphony install [--repo URL] [--version REF]
     cycle symphony path [--version REF]
@@ -336,185 +335,159 @@ defmodule Cycle.CLI do
   end
 
   defp status(args) do
-    with {:ok, opts} <-
-           parse_options(args, %{state_url: @default_state_url}, %{"--state-url" => :state_url}),
-         {:ok, config} <- Cycle.Config.load(),
-         {:ok, engine_id} <- default_engine_id(config) do
-      engine = status_engine(config, engine_id)
-      puts("Cycle status")
-      puts("  config: #{config_home()}")
-      puts("  state:  #{cycle_home()}")
-      puts("  engine: #{engine.health["state"]} at #{engine.install_path}")
+    with {:ok, opts} <- parse_options(args, %{}, %{"--json" => :json}),
+         {:ok, snapshot} <- Cycle.StatusSnapshot.build() do
+      if opts[:json],
+        do: puts(Jason.encode!(snapshot, pretty: true)),
+        else: print_status(snapshot)
+    end
+  end
 
-      if engine.health["reason"] do
-        puts("  engine reason: #{engine.health["reason"]}")
+  defp print_status(snapshot) do
+    engine = snapshot["engines"]["details"] |> List.first() |> Kernel.||(%{})
+    engine_health = get_in(engine, ["health", "state"]) || "unknown"
+
+    puts("Cycle status")
+    puts("  config: #{snapshot["paths"]["config"]}")
+    puts("  state:  #{snapshot["paths"]["state"]}")
+    puts("  logs:   #{snapshot["paths"]["logs"]}")
+    puts("  engine: #{engine_health} at #{engine["install_path"]}")
+
+    if get_in(engine, ["health", "reason"]) do
+      puts("  engine reason: #{get_in(engine, ["health", "reason"])}")
+    end
+
+    case snapshot["linear"]["auth"] do
+      "configured" -> puts("  linear: configured")
+      _ -> puts("  linear: missing LINEAR_API_KEY")
+    end
+
+    project_counts = snapshot["projects"]["counts"]
+
+    puts(
+      "  projects: #{project_counts["watched"] || 0} watched, #{project_counts["invalid"] || 0} invalid"
+    )
+
+    Enum.each(snapshot["registries"], fn {name, registry} ->
+      if registry["state"] == "error" do
+        puts("  registry error: #{name} #{registry["path"]}: #{registry["error"]}")
       end
+    end)
 
-      if present?(linear_api_key()),
-        do: puts("  linear: configured"),
-        else: puts("  linear: missing LINEAR_API_KEY")
+    run_counts = snapshot["runs"]["counts"]
 
-      print_policy_drift_summary(config.projects["registry_path"])
+    puts(
+      "  runs: #{run_counts["running"]} running, #{run_counts["queued"]} queued, #{run_counts["retrying"]} retrying, #{run_counts["blocked"]} blocked, #{run_counts["judging"]} judging, #{run_counts["completed"]} completed, #{run_counts["failed"]} failed"
+    )
 
-      case System.find_executable("curl") do
-        nil -> puts("  symphony: curl unavailable; skipping status API check")
-        _ -> status_api(opts.state_url)
+    judge = snapshot["review_judge"]
+
+    puts(
+      "  review judge: #{judge["source_queue_count"]} queued, #{judge["active_count"]} active, #{judge["duplicate_skips"]} duplicate skips, #{judge["route_failures"]} route failures"
+    )
+
+    Enum.each(judge["last_decisions"], fn decision ->
+      puts(
+        "  review decision: #{get_in(decision, ["issue", "identifier"]) || "unknown"} #{decision["decision"] || decision["status"]}"
+      )
+    end)
+
+    Enum.each(judge["hard_review_reasons"], fn {reason, count} ->
+      puts("  hard review: #{reason} #{count}")
+    end)
+
+    drift = snapshot["drift"]
+    drifted_projects = snapshot["projects"]["details"] |> Enum.count(&(&1["status"] == "drift"))
+    puts("  policy drift: #{drift["count"]} records across #{drifted_projects} projects")
+
+    Enum.each(snapshot["pressure"] || %{}, fn {name, gate} ->
+      if gate["status"] in ["warn", "blocked"] do
+        puts(
+          "  #{String.replace(name, "_", "-")} pressure: #{gate["status"]} - #{gate["reason"]}"
+        )
       end
-    end
+    end)
+
+    Enum.each(snapshot["discovery"]["last_errors"], fn error ->
+      puts("  discovery error: #{error["project"] || "unknown"}: #{error["error"]}")
+    end)
+
+    Enum.each(snapshot["last_errors"], fn error ->
+      puts("  last error: #{error["source"]}: #{error["summary"] || error["code"] || "unknown"}")
+    end)
+
+    api = snapshot["service"]["api"]
+    puts("  api: #{api["state"]} at #{api["url"]}")
   end
-
-  defp print_policy_drift_summary(registry_path) do
-    case Cycle.Registry.Store.read(registry_path, %{}) do
-      {:ok, raw} ->
-        summarize_policy_drift(raw)
-
-      {:error, _reason} ->
-        puts("  policy drift: unavailable")
-    end
-  end
-
-  defp summarize_policy_drift(raw) do
-    raw = Map.put_new(raw, "projects", [])
-
-    case Cycle.ProjectRegistry.from_map(raw) do
-      {:ok, registry} ->
-        drift_count =
-          registry.projects
-          |> Enum.flat_map(&(get_in(&1.policy_drift || %{}, ["records"]) || []))
-          |> length()
-
-        drifted_projects = Enum.count(registry.projects, &(&1.status == "drift"))
-
-        puts("  policy drift: #{drift_count} records across #{drifted_projects} projects")
-
-      {:error, _errors} ->
-        puts("  policy drift: unavailable")
-    end
-  end
-
-  defp status_api(state_url) do
-    case Req.get(state_url, receive_timeout: 2_000, retry: false) do
-      {:ok, %{status: status, body: payload}} when status in 200..299 ->
-        print_status_payload(payload, state_url)
-
-      _ ->
-        puts("  symphony: no status response from #{state_url}")
-    end
-  end
-
-  defp print_status_payload(payload, _state_url) when is_map(payload) do
-    running = payload["running"] || get_in(payload, ["counts", "running"]) || []
-    retrying = payload["retrying"] || []
-    projects = payload["projects"] || []
-
-    puts("  symphony: reachable")
-    puts("  running: #{countish(running)}")
-    puts("  retries: #{countish(retrying)}")
-    puts("  projects: #{countish(projects)}")
-  end
-
-  defp print_status_payload(_payload, state_url),
-    do: puts("  symphony: reachable at #{state_url}")
-
-  defp status_engine(config, engine_id) do
-    registry_path = get_in(config.engines, ["registry_path"])
-    default = Cycle.EngineRegistry.default_record(config, engine_id)
-
-    engine =
-      case Cycle.EngineRegistry.read(registry_path) do
-        {:ok, registry} ->
-          registry
-          |> Cycle.Engine.Health.refresh_registry()
-          |> persist_refreshed_registry(registry_path)
-          |> Cycle.EngineRegistry.find(engine_id)
-          |> Kernel.||(default)
-
-        {:error, _error} ->
-          default
-      end
-
-    %{engine | health: Cycle.Engine.Health.check(engine)}
-  end
-
-  defp persist_refreshed_registry(registry, registry_path) do
-    case Cycle.EngineRegistry.write(registry_path, registry) do
-      :ok -> registry
-      {:error, _reason} -> registry
-    end
-  end
-
-  defp countish(value) when is_list(value), do: length(value)
-  defp countish(value), do: value
 
   defp start(args) do
     with {:ok, opts} <-
-           parse_options(args, %{port: "4000", ref: @default_symphony_ref}, %{
-             "--workflow" => :workflow,
-             "--port" => :port,
-             "--version" => :ref,
-             "--ref" => :ref,
-             "--dry-run" => :dry_run
+           parse_options(args, %{}, %{
+             "--dry-run" => :dry_run,
+             "--no-dispatch" => :no_dispatch,
+             "--once" => :once
            }),
-         {:ok, config} <- Cycle.Config.load(),
-         {:ok, engine_id} <- engine_id_for(config, opts.ref) do
-      cond do
-        !present?(opts[:workflow]) ->
-          {:error, "cycle start requires --workflow PATH", 1}
+         {:ok, config} <- load_config() do
+      with :ok <- maybe_start_api(config, opts) do
+        case Cycle.Reconciler.start(config,
+               dry_run: opts[:dry_run],
+               no_dispatch: opts[:no_dispatch],
+               once: opts[:once]
+             ) do
+          :ok ->
+            :ok
 
-        true ->
-          engine = start_engine(config, engine_id)
+          {:ok, result} ->
+            print_reconcile_result(result)
 
-          case Cycle.Engine.Symphony.start_foreground(engine,
-                 workflow: opts.workflow,
-                 port: opts.port,
-                 dry_run: opts[:dry_run],
-                 allow_foreground_unattended: foreground_unattended?(config, engine_id),
-                 env: start_env(config)
-               ) do
-            {:ok, command} ->
-              puts(Enum.join(command, " "))
-
-            :ok ->
-              :ok
-
-            {:error, %{"message" => message, "code" => code}} ->
-              {:error, message, error_code(code)}
-          end
+          {:error, reason} ->
+            {:error, reconciler_error(reason), 2}
+        end
       end
     end
   end
 
-  defp start_engine(config, engine_id) do
-    registry_path = get_in(config.engines, ["registry_path"])
-    default = Cycle.EngineRegistry.default_record(config, engine_id)
+  defp maybe_start_api(_config, %{dry_run: true}), do: :ok
 
-    case Cycle.EngineRegistry.read(registry_path) do
-      {:ok, registry} -> Cycle.EngineRegistry.find(registry, engine_id) || default
-      {:error, _reason} -> default
+  defp maybe_start_api(config, _opts) do
+    if get_in(config.service, ["api", "enabled"]) == true do
+      case Cycle.API.Router.start_link(config: config) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> {:error, "could not start Cycle status API: #{inspect(reason)}", 1}
+      end
+    else
+      :ok
     end
   end
 
-  defp foreground_unattended?(config, engine_id) do
-    get_in(config.engines, ["managed", engine_id.name, "foreground_unattended"]) == true
+  defp print_reconcile_result(%Cycle.Reconciler.Result{} = result) do
+    puts("Cycle reconcile")
+    puts("  projects: #{length(result.discovery.records)}")
+    puts("  issues: #{length(result.issues)}")
+    puts("  decisions: #{length(result.decisions)}")
+    puts("  recorded: #{length(result.recorded)}")
+    puts("  dispatched: #{length(result.dispatched)}")
+
+    Enum.each(result.engine_health, fn health ->
+      state = health["state"] || "unknown"
+      detail = health["reason"] || health["path"] || ""
+      puts("  engine: #{String.trim("#{state} #{detail}")}")
+    end)
   end
 
-  defp start_env(config) do
-    case get_in(config.linear, ["api_key_env"]) do
-      env_name when is_binary(env_name) and env_name != "" ->
-        if present?(config.secrets["linear_api_key"]),
-          do: %{env_name => config.secrets["linear_api_key"]},
-          else: %{}
+  defp reconciler_error({:auth, :missing_token, token_env}), do: "#{token_env} is not configured"
 
-      _ ->
-        %{}
-    end
-  end
+  defp reconciler_error({:http, status, _body}),
+    do: "Linear API request failed with status #{status}"
 
-  defp error_code("workflow_required"), do: 1
-  defp error_code("workflow_missing"), do: 1
-  defp error_code("engine_executable_missing"), do: 2
-  defp error_code("engine_exited"), do: 2
-  defp error_code(_code), do: 2
+  defp reconciler_error({:transport, message}), do: "Linear API request failed: #{message}"
+
+  defp reconciler_error({:graphql, errors}),
+    do: "Linear API returned errors: #{Jason.encode!(errors)}"
+
+  defp reconciler_error({:decode, message}), do: "Linear API response decode failed: #{message}"
+  defp reconciler_error(reason), do: inspect(reason)
 
   defp policy(["drift" | rest]), do: policy_drift(rest)
   defp policy(["propagate" | rest]), do: policy_propagate(rest)
@@ -699,7 +672,18 @@ defmodule Cycle.CLI do
 
   defp parse_options([arg | rest], opts, spec) do
     case Map.fetch(spec, arg) do
-      {:ok, key} when key in [:from_env, :print, :raw, :dry_run, :json, :apply, :allow_dirty] ->
+      {:ok, key}
+      when key in [
+             :from_env,
+             :print,
+             :raw,
+             :dry_run,
+             :no_dispatch,
+             :once,
+             :json,
+             :apply,
+             :allow_dirty
+           ] ->
         parse_options(rest, Map.put(opts, key, true), spec)
 
       {:ok, key} ->

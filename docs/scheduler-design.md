@@ -65,6 +65,11 @@ Cycle should apply capacity in this order:
 The first public version can implement budget/rate-limit as a conservative
 disable or warning gate. Later versions can add weighted scheduling.
 
+Budget and rate-limit gates support `off`, `warn`, and `block` modes. Warn mode
+annotates scheduler decisions and status without blocking new dispatch.
+Block mode prevents only new dispatch; it must not cancel, stop, or mutate
+already running work solely because pressure appeared after the run started.
+
 ## Policy Drift Gate
 
 Cycle should evaluate each project workflow against global policy before
@@ -134,6 +139,7 @@ Before each retry, Cycle should refresh Linear state and blockers.
 - review judge queue
 - engine health
 - capacity used versus available
+- budget and rate-limit pressure state and reasons
 - last discovery error per project
 - policy drift count and drift details by project
 - whether drift is report-only, blocking, or eligible for propagation

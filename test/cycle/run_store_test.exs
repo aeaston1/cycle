@@ -115,6 +115,67 @@ defmodule Cycle.RunStoreTest do
     end
   end
 
+  test "schedule_retry increments attempts and caps deterministic backoff" do
+    root = temp_root()
+    path = Path.join(root, "runs.yaml")
+
+    try do
+      assert {:ok, run} = RunStore.create_queued(path, run_attrs(%{"id" => "run-1"}), now: @t0)
+      assert {:ok, _running} = RunStore.transition(path, run.id, "running", %{}, now: @t1)
+
+      assert {:ok, first} =
+               RunStore.schedule_retry(path, run.id, "engine_unhealthy",
+                 now: @t1,
+                 base_delay_seconds: 30,
+                 max_delay_seconds: 60
+               )
+
+      assert first.retry["attempt"] == 1
+      assert first.retry["next_retry_at"] == "2026-05-22T12:01:30Z"
+      assert first.last_event["reason_code"] == "engine_unhealthy"
+
+      assert {:ok, second} =
+               RunStore.schedule_retry(path, run.id, "engine_unhealthy",
+                 now: @t2,
+                 base_delay_seconds: 30,
+                 max_delay_seconds: 60
+               )
+
+      assert second.retry["attempt"] == 2
+      assert second.retry["next_retry_at"] == "2026-05-22T12:03:00Z"
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  test "schedule_retry stores capped next retry time" do
+    root = temp_root()
+    path = Path.join(root, "runs.yaml")
+
+    try do
+      assert {:ok, run} =
+               RunStore.create_queued(
+                 path,
+                 run_attrs(%{"id" => "run-1", "retry" => %{"attempt" => 5}}),
+                 now: @t0
+               )
+
+      assert {:ok, _running} = RunStore.transition(path, run.id, "running", %{}, now: @t1)
+
+      assert {:ok, retrying} =
+               RunStore.schedule_retry(path, run.id, "engine_unhealthy",
+                 now: @t1,
+                 base_delay_seconds: 30,
+                 max_delay_seconds: 60
+               )
+
+      assert retrying.retry["attempt"] == 6
+      assert retrying.retry["next_retry_at"] == "2026-05-22T12:02:00Z"
+    after
+      File.rm_rf!(root)
+    end
+  end
+
   test "survives process restart through registry persistence" do
     root = temp_root()
     path = Path.join(root, "runs.yaml")
