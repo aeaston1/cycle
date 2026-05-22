@@ -400,23 +400,47 @@ defmodule Cycle.CLI do
         true ->
           engine = start_engine(config, engine_id)
 
-          case Cycle.Engine.Symphony.start_foreground(engine,
-                 workflow: opts.workflow,
-                 port: opts.port,
-                 dry_run: opts[:dry_run],
-                 allow_foreground_unattended: foreground_unattended?(config, engine_id),
-                 env: start_env(config)
-               ) do
-            {:ok, command} ->
-              puts(Enum.join(command, " "))
-
+          case maybe_start_api(config, opts) do
             :ok ->
-              :ok
+              start_foreground(engine, config, engine_id, opts)
 
-            {:error, %{"message" => message, "code" => code}} ->
-              {:error, message, error_code(code)}
+            {:error, reason} ->
+              {:error, reason, 1}
           end
       end
+    end
+  end
+
+  defp start_foreground(engine, config, engine_id, opts) do
+    case Cycle.Engine.Symphony.start_foreground(engine,
+           workflow: opts.workflow,
+           port: opts.port,
+           dry_run: opts[:dry_run],
+           allow_foreground_unattended: foreground_unattended?(config, engine_id),
+           env: start_env(config)
+         ) do
+      {:ok, command} ->
+        puts(Enum.join(command, " "))
+
+      :ok ->
+        :ok
+
+      {:error, %{"message" => message, "code" => code}} ->
+        {:error, message, error_code(code)}
+    end
+  end
+
+  defp maybe_start_api(_config, %{dry_run: true}), do: :ok
+
+  defp maybe_start_api(config, _opts) do
+    if get_in(config.service, ["api", "enabled"]) == true do
+      case Cycle.API.Router.start_link(config: config) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> {:error, "could not start Cycle status API: #{inspect(reason)}"}
+      end
+    else
+      :ok
     end
   end
 

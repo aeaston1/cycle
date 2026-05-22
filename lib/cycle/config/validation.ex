@@ -44,7 +44,10 @@ defmodule Cycle.Config.Validation do
       "scheduler.max_concurrent_runs",
       get_in(config.scheduler, ["max_concurrent_runs"])
     )
+    |> require_boolean("service.api.enabled", get_in(config.service, ["api", "enabled"]))
+    |> require_string("service.api.bind", get_in(config.service, ["api", "bind"]))
     |> require_positive_integer("service.api.port", get_in(config.service, ["api", "port"]))
+    |> require_local_bind_or_explicit_config(config)
     |> require_string("service.logs.path", get_in(config.service, ["logs", "path"]))
     |> then(fn
       [] -> {:ok, config}
@@ -107,4 +110,31 @@ defmodule Cycle.Config.Validation do
 
   defp require_positive_integer(errors, path, _value),
     do: [%{path: path, reason: "must be a positive integer"} | errors]
+
+  defp require_boolean(errors, _path, value) when is_boolean(value), do: errors
+
+  defp require_boolean(errors, path, _value),
+    do: [%{path: path, reason: "must be a boolean"} | errors]
+
+  defp require_local_bind_or_explicit_config(errors, %Config{} = config) do
+    bind = get_in(config.service, ["api", "bind"])
+    allow_non_local? = get_in(config.service, ["api", "allow_non_local"]) == true
+
+    if local_bind?(bind) or allow_non_local? do
+      errors
+    else
+      [
+        %{
+          path: "service.api.allow_non_local",
+          reason: "must be true when service.api.bind is not localhost"
+        }
+        | errors
+      ]
+    end
+  end
+
+  defp local_bind?("127.0.0.1"), do: true
+  defp local_bind?("::1"), do: true
+  defp local_bind?("localhost"), do: true
+  defp local_bind?(_bind), do: false
 end
