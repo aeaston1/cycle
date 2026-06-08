@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cycle Project Onboarding"
+  short_description: "Onboard GitHub and Linear projects into Cycle"
+  default_prompt: "Use $cycle-project-onboarding to onboard this GitHub repository and Linear project into Cycle."

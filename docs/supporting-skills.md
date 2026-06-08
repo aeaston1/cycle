@@ -92,6 +92,11 @@ The first public skill pack should be small and Cycle-owned. Candidate skills:
 | `cycle-judge-review` | Inspect judge evidence, hashes, review routing decisions, and reviewer handoff notes. |
 | `cycle-project-onboarding` | Guide repo onboarding with `cycle:` Linear metadata and repo `WORKFLOW.md` setup. |
 
+`cycle-project-onboarding` is the first repo-contained optional skill source.
+It lives under `skills/cycle-project-onboarding` for source-checkout review and
+manual installation. It is not active by default, not installed by Homebrew, and
+not installed by any Cycle CLI command in the current release.
+
 The existing Symphony and machine-local skills are prototypes only. Public
 Cycle skills should be authored from scratch or heavily rewritten so they use
 public examples such as `OWNER/REPO`, avoid private machine assumptions, and

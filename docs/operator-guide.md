@@ -76,6 +76,12 @@ Discovery validates metadata and writes the project registry under Cycle state.
 Invalid projects are reported without blocking discovery for other projects.
 See `docs/metadata-spec.md` for the accepted fields and parser behavior.
 
+For source-checkout users who want agent-assisted onboarding, Cycle also keeps
+an optional `skills/cycle-project-onboarding` skill source in this repository.
+It is not installed by Homebrew or by any Cycle command; review and install it
+manually only if you want an agent to help verify GitHub, Linear, and `cycle:`
+metadata setup.
+
 ## Engine Install
 
 Install the default Symphony engine:

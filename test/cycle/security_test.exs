@@ -34,6 +34,21 @@ defmodule Cycle.SecurityTest do
            ] = Cycle.Security.scan_public_docs(root)
   end
 
+  test "public docs scan includes skill sources" do
+    root = tmp_dir()
+    skill_dir = Path.join(root, "skills/example")
+    File.mkdir_p!(skill_dir)
+    File.write!(Path.join(skill_dir, "SKILL.md"), "clone aeaston1/cycle\n")
+
+    assert [
+             %{
+               path: "skills/example/SKILL.md",
+               reason: "contains private repo name",
+               value: "aeaston1/cycle"
+             }
+           ] = Cycle.Security.scan_public_docs(root)
+  end
+
   test "repository public docs and examples do not contain private repo names" do
     assert [] = Cycle.Security.scan_public_docs(File.cwd!())
   end
