@@ -15,6 +15,18 @@ defmodule Cycle.Config.Validation do
     |> require_string("paths.state_dir", config.paths.state_dir)
     |> require_string("paths.logs_dir", config.paths.logs_dir)
     |> require_string("paths.engines_dir", config.paths.engines_dir)
+    |> require_under(
+      "paths.logs_dir",
+      config.paths.logs_dir,
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
+    |> require_under(
+      "paths.engines_dir",
+      config.paths.engines_dir,
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> require_url("linear.endpoint", get_in(config.linear, ["endpoint"]))
     |> require_string("linear.api_key_env", get_in(config.linear, ["api_key_env"]))
     |> require_non_empty_list("linear.active_states", get_in(config.linear, ["active_states"]))
@@ -24,14 +36,44 @@ defmodule Cycle.Config.Validation do
     )
     |> require_positive_integer("polling.interval_ms", get_in(config.polling, ["interval_ms"]))
     |> require_string("projects.registry_path", get_in(config.projects, ["registry_path"]))
+    |> require_under(
+      "projects.registry_path",
+      get_in(config.projects, ["registry_path"]),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> require_string(
       "projects.workflow_cache_path",
       get_in(config.projects, ["workflow_cache_path"])
     )
+    |> require_under(
+      "projects.workflow_cache_path",
+      get_in(config.projects, ["workflow_cache_path"]),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> require_string("engines.registry_path", get_in(config.engines, ["registry_path"]))
+    |> require_under(
+      "engines.registry_path",
+      get_in(config.engines, ["registry_path"]),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> require_string("engines.lock_path", get_in(config.engines, ["lock_path"]))
+    |> require_under(
+      "engines.lock_path",
+      get_in(config.engines, ["lock_path"]),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> require_string("engines.default", get_in(config.engines, ["default"]))
     |> require_string("engines.install_root", get_in(config.engines, ["install_root"]))
+    |> require_under(
+      "engines.install_root",
+      get_in(config.engines, ["install_root"]),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> require_git_repository(
       "engines.managed.openai-symphony.repo",
       get_in(config.engines, ["managed", "openai-symphony", "repo"])
@@ -51,6 +93,12 @@ defmodule Cycle.Config.Validation do
     |> require_positive_integer("service.api.port", get_in(config.service, ["api", "port"]))
     |> require_local_bind_or_explicit_config(config)
     |> require_string("service.logs.path", get_in(config.service, ["logs", "path"]))
+    |> require_under(
+      "service.logs.path",
+      get_in(config.service, ["logs", "path"]),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
     |> then(fn
       [] -> {:ok, config}
       errors -> {:error, Enum.reverse(errors)}
@@ -61,6 +109,21 @@ defmodule Cycle.Config.Validation do
 
   defp require_string(errors, path, _value),
     do: [%{path: path, reason: "must be a non-empty string"} | errors]
+
+  defp require_under(errors, path, value, root, root_path)
+       when is_binary(value) and is_binary(root) do
+    expanded_value = Path.expand(value)
+    expanded_root = Path.expand(root)
+    relative = Path.relative_to(expanded_value, expanded_root)
+
+    if Path.type(relative) == :relative and List.first(Path.split(relative)) != ".." do
+      errors
+    else
+      [%{path: path, reason: "must be under #{root_path}"} | errors]
+    end
+  end
+
+  defp require_under(errors, _path, _value, _root, _root_path), do: errors
 
   defp require_url(errors, path, value) when is_binary(value) do
     uri = URI.parse(value)

@@ -10,6 +10,10 @@ defmodule Cycle.Reconciler do
   alias Cycle.Issue
   alias Cycle.Linear.Client
   alias Cycle.ProjectDiscovery
+  alias Cycle.Policy.EvidenceHash
+  alias Cycle.Policy.ReviewEvidence
+  alias Cycle.Policy.ReviewJudge
+  alias Cycle.Policy.ReviewRouter
   alias Cycle.RunStore
   alias Cycle.Scheduler
 
@@ -22,6 +26,7 @@ defmodule Cycle.Reconciler do
       engine_health: [],
       issues: [],
       decisions: [],
+      review_results: [],
       recorded: [],
       dispatched: []
     ]
@@ -68,6 +73,9 @@ defmodule Cycle.Reconciler do
              opts
            ),
          {:ok, run_store} <- RunStore.load(run_store_path(config)),
+         {:ok, review_issues} <- list_review_issues(config, client, discovery.records, opts),
+         {:ok, review_results} <-
+           review_issues(config, review_issues, client, global_policy, opts),
          {:ok, issues} <- list_candidate_issues(config, client, discovery.records, opts),
          decisions <- decide(config, issues, engine_registry, run_store, client, opts),
          {:ok, outcome} <- apply_decisions(config, decisions, opts) do
@@ -79,6 +87,7 @@ defmodule Cycle.Reconciler do
          engine_health: Enum.map(engine_registry.engines, & &1.health),
          issues: issues,
          decisions: decisions,
+         review_results: review_results,
          recorded: retry_outcome.recorded ++ outcome.recorded,
          dispatched: outcome.dispatched
        }}
@@ -178,29 +187,177 @@ defmodule Cycle.Reconciler do
   end
 
   defp list_candidate_issues(config, client, projects, opts) do
-    active_states = get_in(config.linear, ["active_states"]) || []
     issue_lister = Keyword.get(opts, :issue_lister, &Client.list_issues/4)
 
     projects
     |> Enum.reject(&(&1.status == "invalid"))
     |> Enum.reduce_while({:ok, []}, fn project, {:ok, acc} ->
       project_id = get_in(project.linear_project, ["id"])
+      active_states = scheduler_active_states(config, project)
 
-      case issue_lister.(client, project_id, active_states, []) do
-        {:ok, issues} ->
-          normalized = Enum.map(issues, &Issue.from_linear(&1, project))
-          {:cont, {:ok, acc ++ normalized}}
+      if active_states == [] do
+        {:cont, {:ok, acc}}
+      else
+        case issue_lister.(client, project_id, active_states, []) do
+          {:ok, issues} ->
+            normalized = Enum.map(issues, &Issue.from_linear(&1, project))
+            {:cont, {:ok, acc ++ normalized}}
 
-        {:error, reason} ->
-          Cycle.Log.log_event(config, :error, "discovery issue listing failed", %{
-            "project_id" => project_id,
-            "project" => get_in(project.linear_project || %{}, ["name"]),
-            "error" => inspect(reason)
-          })
+          {:error, reason} ->
+            Cycle.Log.log_event(config, :error, "discovery issue listing failed", %{
+              "project_id" => project_id,
+              "project" => get_in(project.linear_project || %{}, ["name"]),
+              "error" => inspect(reason)
+            })
 
-          {:halt, {:error, reason}}
+            {:halt, {:error, reason}}
+        end
       end
     end)
+  end
+
+  defp list_review_issues(config, client, projects, opts) do
+    issue_lister = Keyword.get(opts, :issue_lister, &Client.list_issues/4)
+
+    projects
+    |> Enum.filter(&review_enabled?(config, &1))
+    |> Enum.reduce_while({:ok, []}, fn project, {:ok, acc} ->
+      project_id = get_in(project.linear_project, ["id"])
+      source_state = review_source_state(config, project)
+
+      if present?(source_state) do
+        case issue_lister.(client, project_id, [source_state], []) do
+          {:ok, issues} ->
+            normalized = Enum.map(issues, &Issue.from_linear(&1, project))
+            {:cont, {:ok, acc ++ normalized}}
+
+          {:error, reason} ->
+            Cycle.Log.log_event(config, :error, "review issue listing failed", %{
+              "project_id" => project_id,
+              "project" => get_in(project.linear_project || %{}, ["name"]),
+              "error" => inspect(reason)
+            })
+
+            {:halt, {:error, reason}}
+        end
+      else
+        {:cont, {:ok, acc}}
+      end
+    end)
+  end
+
+  defp review_issues(config, issues, client, global_policy, opts) do
+    Enum.reduce_while(issues, {:ok, []}, fn issue, {:ok, acc} ->
+      case review_issue(config, issue, client, global_policy, opts) do
+        {:ok, result} -> {:cont, {:ok, acc ++ [result]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp review_issue(config, issue, client, global_policy, opts) do
+    policy = review_policy(config, issue)
+    evidence_builder = Keyword.get(opts, :review_evidence_builder, &ReviewEvidence.build/3)
+
+    evidence =
+      evidence_builder.(issue, client,
+        run_store_path: run_store_path(config),
+        workspace_path: workspace_path(config, issue),
+        workflow_policy_version: get_in(issue.project, ["workflow", "policy_hash"]),
+        global_policy_version: global_policy_version(config, global_policy),
+        code_changing?: true
+      )
+
+    decision =
+      ReviewJudge.decide(evidence, policy, runner: Keyword.get(opts, :review_judge_runner))
+
+    evidence_hash =
+      EvidenceHash.compute(evidence.stable_hash_input,
+        judge_profile: policy["policy"],
+        workflow_policy_version: evidence.workflow_policy_version,
+        global_policy_version: evidence.global_policy_version
+      )
+
+    router = Keyword.get(opts, :review_router, &ReviewRouter.route/3)
+
+    case router.(issue, decision,
+           client: client,
+           evidence_hash: evidence_hash,
+           source_state: policy["source_state"],
+           review_state: policy["review_state"],
+           proceed_state: policy["proceed_state"],
+           review_judge_registry_path: Cycle.ReviewJudgeRegistry.path(config.paths.state_dir),
+           refresh_issue: Keyword.get(opts, :review_refresh_issue, &Client.refresh_issue/2),
+           list_comments: Keyword.get(opts, :review_list_comments, &Client.list_comments/2),
+           create_comment: Keyword.get(opts, :review_create_comment, &Client.create_comment/3),
+           update_issue_state:
+             Keyword.get(opts, :review_update_issue_state, &Client.update_issue_state/3)
+         ) do
+      %ReviewRouter.Result{} = result ->
+        log_review_result(config, issue, result)
+        {:ok, result}
+
+      other ->
+        {:error, {:review_router, :unexpected_result, other}}
+    end
+  end
+
+  defp log_review_result(config, issue, %ReviewRouter.Result{} = result) do
+    Cycle.Log.log_event(config, :info, "review judge decision routed", %{
+      "issue" => issue.identifier || issue.id,
+      "status" => Atom.to_string(result.status),
+      "reason_code" => result.reason_code,
+      "message" => result.message,
+      "details" => result.details
+    })
+  end
+
+  defp scheduler_active_states(config, project) do
+    states =
+      get_in(project.workflow || %{}, ["policy", "tracker", "active_states"]) ||
+        get_in(config.linear, ["active_states"]) ||
+        []
+
+    review_states =
+      if review_enabled?(config, project),
+        do: [review_source_state(config, project)],
+        else: []
+
+    states
+    |> Enum.reject(&(&1 in review_states))
+    |> Enum.uniq()
+  end
+
+  defp review_enabled?(config, project) do
+    review_policy(config, project)["enabled"] == true and
+      project_status(project) in ["active", "valid", "drift"]
+  end
+
+  defp review_source_state(config, project), do: review_policy(config, project)["source_state"]
+
+  defp review_policy(config, %Issue{} = issue), do: review_policy(config, issue.project || %{})
+
+  defp review_policy(config, %{workflow: workflow}) do
+    workflow_policy = get_in(workflow || %{}, ["policy", "review_judge"]) || %{}
+    Map.merge(config.review_judge || %{}, workflow_policy)
+  end
+
+  defp review_policy(config, project) when is_map(project) do
+    workflow_policy = get_in(project, ["workflow", "policy", "review_judge"]) || %{}
+    Map.merge(config.review_judge || %{}, workflow_policy)
+  end
+
+  defp project_status(%{status: status}), do: status
+  defp project_status(project) when is_map(project), do: project["status"]
+
+  defp global_policy_version(config, %GlobalPolicy{} = global_policy) do
+    input = %{
+      "policy" => config.policy || %{},
+      "enforcement" => global_policy.enforcement,
+      "propagation" => global_policy.propagation
+    }
+
+    "sha256:" <> Base.encode16(:crypto.hash(:sha256, Jason.encode!(input)), case: :lower)
   end
 
   defp reconcile_retries(config, run_store, projects, engine_registry, client, now, opts) do
@@ -608,7 +765,7 @@ defmodule Cycle.Reconciler do
 
   defp log_result(result, logger) do
     logger.(
-      "cycle reconcile ok: projects=#{length(result.discovery.records)} issues=#{length(result.issues)} decisions=#{length(result.decisions)} recorded=#{length(result.recorded)} dispatched=#{length(result.dispatched)}"
+      "cycle reconcile ok: projects=#{length(result.discovery.records)} issues=#{length(result.issues)} decisions=#{length(result.decisions)} review=#{length(result.review_results)} recorded=#{length(result.recorded)} dispatched=#{length(result.dispatched)}"
     )
 
     Enum.each(result.engine_health, fn health ->
@@ -619,4 +776,5 @@ defmodule Cycle.Reconciler do
   defp default_log(message), do: IO.puts(message)
   defp format_error({:auth, :missing_token, env}), do: "#{env} is not configured"
   defp format_error(reason), do: inspect(reason)
+  defp present?(value), do: is_binary(value) and String.trim(value) != ""
 end

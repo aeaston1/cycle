@@ -4,6 +4,8 @@ defmodule Cycle.ReconcilerTest do
   import Plug.Conn
 
   alias Cycle.Linear.Client
+  alias Cycle.Policy.ReviewEvidence.Evidence
+  alias Cycle.Policy.ReviewRouter
   alias Cycle.Reconciler
   alias Cycle.RunStore
 
@@ -60,6 +62,74 @@ defmodule Cycle.ReconcilerTest do
 
       assert Reconciler.reconcile_once(config, linear_client: client) ==
                {:error, {:auth, :missing_token, "LINEAR_API_KEY"}}
+    end)
+  end
+
+  test "one-shot routes review judge issues outside normal scheduling" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path)
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home,
+          workflow: %{
+            "policy" => %{
+              "required" => %{"agent" => %{"max_concurrent_agents" => 3}}
+            }
+          }
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", states, _opts ->
+          send(parent, {:scheduler_states, states})
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(parent, {:review_routed, issue.identifier, decision.decision, opts[:evidence_hash]})
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 local_checkout_paths: [checkout_path],
+                 issue_lister: issue_lister,
+                 review_evidence_builder: &review_evidence/3,
+                 review_judge_runner: __MODULE__.ProceedRunner,
+                 review_router: review_router,
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%ReviewRouter.Result{status: :written}] = result.review_results
+      assert [%{status: "drift"}] = result.discovery.records
+      assert result.decisions == []
+      assert_received {:review_routed, "AEA-200", "proceed_to_merging", "sha256:" <> _hash}
+      assert_received {:scheduler_states, ["Todo", "In Progress"]}
     end)
   end
 
@@ -260,6 +330,59 @@ defmodule Cycle.ReconcilerTest do
     )
   end
 
+  defp client_issue(overrides) do
+    issue = linear_issue(overrides)
+
+    %Client.Issue{
+      id: issue["id"],
+      identifier: issue["identifier"],
+      title: issue["title"],
+      url: issue["url"],
+      state: get_in(issue, ["state", "name"]),
+      state_type: get_in(issue, ["state", "type"]),
+      branch_name: issue["branchName"],
+      assignee_id: get_in(issue, ["assignee", "id"]),
+      assignee_name: get_in(issue, ["assignee", "name"]),
+      assignee_email: get_in(issue, ["assignee", "email"]),
+      labels: [],
+      blocks: [],
+      priority: issue["priority"],
+      priority_label: issue["priorityLabel"],
+      created_at: issue["createdAt"],
+      updated_at: issue["updatedAt"],
+      project_id: get_in(issue, ["project", "id"]),
+      team_id: get_in(issue, ["team", "id"])
+    }
+  end
+
+  defmodule ProceedRunner do
+    @behaviour Cycle.Policy.ReviewJudge.Runner
+
+    def run(_prompt, _model_config) do
+      {:ok,
+       %{
+         "decision" => "proceed_to_merging",
+         "confidence" => "high",
+         "reason" => "Validated.",
+         "evidence" => ["tests passed"]
+       }}
+    end
+  end
+
+  defp review_evidence(issue, _client, opts) do
+    %Evidence{
+      issue: %{"id" => issue.id, "identifier" => issue.identifier, "title" => issue.title},
+      labels: issue.labels || [],
+      comments: [],
+      workpad: nil,
+      run: %{"id" => "run-id", "evidence" => [%{"type" => "validation", "status" => "passed"}]},
+      git: %{"changed_files" => [], "has_changes" => false},
+      workflow_policy_version: opts[:workflow_policy_version],
+      global_policy_version: opts[:global_policy_version],
+      stable_hash_input: %{"issue" => %{"identifier" => issue.identifier}}
+    }
+  end
+
   defp seed_retrying_run!(cycle_home) do
     path = Path.join(cycle_home, "runs.yaml")
 
@@ -309,6 +432,31 @@ defmodule Cycle.ReconcilerTest do
         - In Progress
       terminal_states:
         - Done
+    ---
+    Fixture workflow.
+    """)
+  end
+
+  defp write_review_workflow!(root) do
+    File.mkdir_p!(root)
+
+    File.write!(Path.join(root, "WORKFLOW.md"), """
+    ---
+    agent:
+      max_concurrent_agents: 2
+    tracker:
+      active_states:
+        - Todo
+        - In Progress
+      terminal_states:
+        - Done
+    review_judge:
+      enabled: true
+      source_state: Human Review
+      review_state: Human Review
+      proceed_state: Merging
+      policy: standard
+      minimum_skip_confidence: medium
     ---
     Fixture workflow.
     """)

@@ -47,6 +47,11 @@ inside `WORKFLOW.md`.
 Cycle should also compare the fields it reads against global policy and store
 whether each project is in policy, drifting, or invalid.
 
+Repo-owned workflow hooks that need the GitHub repository slug should receive
+it through an environment variable such as `CYCLE_WORKFLOW_REPOSITORY=OWNER/REPO`
+instead of hardcoding a private owner/name in `WORKFLOW.md`. This keeps the
+workflow usable for real runs while preserving public repository hygiene.
+
 ## Symphony Receives
 
 When Cycle dispatches a run, the selected Symphony engine needs:

@@ -51,6 +51,19 @@ defmodule Cycle.SecurityTest do
            ] = Cycle.Security.scan_public_docs(root)
   end
 
+  test "public docs scan includes root workflow" do
+    root = tmp_dir()
+    File.write!(Path.join(root, "WORKFLOW.md"), "clone aeaston1/cycle\n")
+
+    assert [
+             %{
+               path: "WORKFLOW.md",
+               reason: "contains private repo name",
+               value: "aeaston1/cycle"
+             }
+           ] = Cycle.Security.scan_public_docs(root)
+  end
+
   test "repository public docs and examples do not contain private repo names" do
     assert [] = Cycle.Security.scan_public_docs(File.cwd!())
   end

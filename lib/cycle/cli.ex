@@ -3,7 +3,8 @@ defmodule Cycle.CLI do
   Command-line entrypoint for Cycle.
   """
 
-  @version System.get_env("CYCLE_VERSION") || Mix.Project.config()[:version]
+  @version (System.get_env("CYCLE_VERSION") || Mix.Project.config()[:version])
+           |> String.trim_leading("v")
   @default_symphony_repo "https://github.com/openai/symphony.git"
   @default_symphony_ref "main"
 

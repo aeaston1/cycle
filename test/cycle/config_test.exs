@@ -141,6 +141,88 @@ defmodule Cycle.ConfigTest do
     )
   end
 
+  test "cycle-owned registry cache engine and log paths must stay under state dir" do
+    with_temp_config(
+      """
+      paths:
+        state_dir: /tmp/cycle-owned-state
+        logs_dir: /tmp/not-cycle/logs
+        engines_dir: /tmp/not-cycle/engines-path
+      projects:
+        registry_path: /tmp/not-cycle/projects.yaml
+        workflow_cache_path: /tmp/not-cycle/workflow-cache
+      engines:
+        registry_path: /tmp/not-cycle/engines.yaml
+        lock_path: /tmp/not-cycle/engines.lock.yaml
+        install_root: /tmp/not-cycle/engines
+      service:
+        logs:
+          path: /tmp/not-cycle/logs/cycle.log
+      """,
+      fn config_path ->
+        assert {:error, errors} =
+                 Config.load(
+                   env: %{},
+                   home: @home,
+                   config_path: config_path
+                 )
+
+        assert %{path: "paths.logs_dir", reason: "must be under paths.state_dir"} in errors
+        assert %{path: "paths.engines_dir", reason: "must be under paths.state_dir"} in errors
+
+        assert %{path: "projects.registry_path", reason: "must be under paths.state_dir"} in errors
+
+        assert %{
+                 path: "projects.workflow_cache_path",
+                 reason: "must be under paths.state_dir"
+               } in errors
+
+        assert %{path: "engines.registry_path", reason: "must be under paths.state_dir"} in errors
+        assert %{path: "engines.lock_path", reason: "must be under paths.state_dir"} in errors
+        assert %{path: "engines.install_root", reason: "must be under paths.state_dir"} in errors
+        assert %{path: "service.logs.path", reason: "must be under paths.state_dir"} in errors
+      end
+    )
+  end
+
+  test "relative state file overrides are rejected before normalization" do
+    with_temp_config(
+      """
+      projects:
+        registry_path: projects.yaml
+      """,
+      fn config_path ->
+        assert {:error, errors} =
+                 Config.load(
+                   env: %{"CYCLE_HOME" => "/tmp/cycle-owned-state"},
+                   home: @home,
+                   config_path: config_path
+                 )
+
+        assert %{path: "projects.registry_path", reason: "must be an absolute path"} in errors
+      end
+    )
+  end
+
+  test "sibling path prefixes do not satisfy state dir boundary" do
+    with_temp_config(
+      """
+      projects:
+        registry_path: /tmp/cycle-owned-state-evil/projects.yaml
+      """,
+      fn config_path ->
+        assert {:error, errors} =
+                 Config.load(
+                   env: %{"CYCLE_HOME" => "/tmp/cycle-owned-state"},
+                   home: @home,
+                   config_path: config_path
+                 )
+
+        assert %{path: "projects.registry_path", reason: "must be under paths.state_dir"} in errors
+      end
+    )
+  end
+
   test "legacy config.env can supply LINEAR_API_KEY compatibility" do
     root = temp_root()
     config_home = Path.join(root, "xdg")

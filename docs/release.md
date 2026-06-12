@@ -29,8 +29,9 @@ The command writes `dist/cycle-v0.1.0.tar.gz` and
 `bin/cycle` in the archive is a packaged executable, not the source-tree
 development wrapper.
 
-The artifact task extracts the archive before writing the checksum and scans it
-for known fake secret values and private repository names. Any finding is a
+The artifact task extracts the archive before writing the checksum, runs the
+packaged `bin/cycle --version`, and scans it for known fake secret values and
+private repository names. Any executable smoke failure or scan finding is a
 release blocker.
 
 Later releases can add compiled binaries if Cycle gains a compiled daemon.

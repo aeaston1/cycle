@@ -9,7 +9,7 @@ Cycle does:
 
 1. List Linear projects visible to the configured Linear API token.
 2. Read each project's description and content.
-3. Parse the first valid `cycle:` YAML block.
+3. Parse the first `cycle:` YAML block.
 4. Keep only projects with `enabled: true`.
 5. Normalize and validate the repo URL.
 6. Store the result in the project registry with source namespace and validation
@@ -18,6 +18,11 @@ Cycle does:
    record any drift.
 
 Other metadata namespaces do not opt a project into Cycle.
+
+The first `cycle:` block is authoritative. If it is invalid, Cycle reports the
+project as invalid rather than scanning later blocks for a replacement. This
+keeps stale or duplicated metadata visible instead of silently choosing between
+conflicting project definitions.
 
 ## Minimal Metadata
 

@@ -18,6 +18,13 @@ engines:${CYCLE_HOME:-~/.local/share/cycle}/engines
 The repository should not contain secrets, local config, logs, engine checkouts,
 or runtime state.
 
+Cycle-owned runtime paths must stay under the configured state root. Registry
+files, workflow caches, engine registries, engine install roots, and service
+logs may be customized, but they must resolve under `paths.state_dir`
+(`CYCLE_HOME` by default). Relative overrides such as `projects.yaml` are
+rejected because they can otherwise write Cycle state into the current project
+repository.
+
 ## Environment
 
 Minimum environment:

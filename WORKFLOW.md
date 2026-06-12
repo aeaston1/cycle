@@ -26,12 +26,21 @@ hooks:
       fi
     done
   after_create: |
+    repo="${CYCLE_WORKFLOW_REPOSITORY:-}"
+    if [ -z "$repo" ]; then
+      echo "CYCLE_WORKFLOW_REPOSITORY must be set to OWNER/REPO for this workflow" >&2
+      exit 1
+    fi
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-      gh repo clone aeaston1/cycle . -- --depth 1
+      gh repo clone "$repo" . -- --depth 1
     else
-      git clone --depth 1 https://github.com/aeaston1/cycle.git .
+      git clone --depth 1 "https://github.com/${repo}.git" .
     fi
   before_remove: |
+    repo="${CYCLE_WORKFLOW_REPOSITORY:-}"
+    if [ -z "$repo" ]; then
+      exit 0
+    fi
     branch="$(git branch --show-current 2>/dev/null || true)"
     if [ -z "$branch" ]; then
       exit 0
@@ -42,10 +51,10 @@ hooks:
     if ! gh auth status >/dev/null 2>&1; then
       exit 0
     fi
-    gh pr list --repo aeaston1/cycle --head "$branch" --state open --json number --jq '.[].number' |
+    gh pr list --repo "$repo" --head "$branch" --state open --json number --jq '.[].number' |
       while IFS= read -r pr_number; do
         if [ -n "$pr_number" ]; then
-          gh pr close "$pr_number" --repo aeaston1/cycle --comment "Closing because the Linear issue for branch $branch entered a terminal state without merge."
+          gh pr close "$pr_number" --repo "$repo" --comment "Closing because the Linear issue for branch $branch entered a terminal state without merge."
         fi
       done
 agent:
@@ -139,7 +148,7 @@ Before moving an issue to `Human Review`, ensure there is an open PR for the bra
    - If the push is rejected because the branch is stale, fetch and merge `origin/main`, resolve conflicts, rerun validation, then push again.
    - Use `--force-with-lease` only after a deliberate local history rewrite.
 4. Create or update a PR with `gh`:
-   - If no PR exists: `gh pr create --repo aeaston1/cycle --title "<clear title>" --body "<summary, validation, Linear issue>"`
+   - If no PR exists: `gh pr create --repo "$CYCLE_WORKFLOW_REPOSITORY" --title "<clear title>" --body "<summary, validation, Linear issue>"`
    - If a PR exists: update the title/body if the scope changed.
 5. Attach or mention the PR URL in the Linear issue.
 6. Move the Linear issue to `Human Review` only after validation passed and the PR is open.
@@ -150,9 +159,9 @@ When the issue is in `Rework`:
 
 1. Find the existing PR for the branch.
 2. Read reviewer feedback before editing:
-   - `gh pr view --repo aeaston1/cycle --comments`
-   - `gh pr view --repo aeaston1/cycle --json reviews`
-   - `gh api repos/aeaston1/cycle/pulls/<pr_number>/comments`
+   - `gh pr view --repo "$CYCLE_WORKFLOW_REPOSITORY" --comments`
+   - `gh pr view --repo "$CYCLE_WORKFLOW_REPOSITORY" --json reviews`
+   - `gh api repos/${CYCLE_WORKFLOW_REPOSITORY}/pulls/<pr_number>/comments`
 3. Address actionable feedback or reply with a clear reason when pushing back.
 4. Rerun validation, commit, push, update the PR, and move the issue back to `Human Review`.
 
@@ -163,11 +172,11 @@ When the issue is in `Merging`:
 1. Find the open PR for the current branch.
 2. Confirm the PR is mergeable and has no unresolved actionable review feedback. `Human Review` is the manual approval gate; do not treat an empty GitHub `reviewDecision` as blocking unless branch protection or explicit repo policy requires approval.
 3. Confirm required checks are passing:
-   - `gh pr checks --repo aeaston1/cycle`
+   - `gh pr checks --repo "$CYCLE_WORKFLOW_REPOSITORY"`
 4. If checks fail, inspect logs, fix the issue, rerun validation, commit, and push.
 5. If the PR has merge conflicts, merge latest `origin/main` into the branch, resolve conflicts, rerun validation, and push.
 6. When checks are green and review feedback is handled, squash-merge:
-   - `gh pr merge --repo aeaston1/cycle --squash --delete-branch`
+   - `gh pr merge --repo "$CYCLE_WORKFLOW_REPOSITORY" --squash --delete-branch`
 7. Move the Linear issue to `Done` only after the PR is merged.
 
 ## Terminal Cleanup

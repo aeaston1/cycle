@@ -82,6 +82,21 @@ It is not installed by Homebrew or by any Cycle command; review and install it
 manually only if you want an agent to help verify GitHub, Linear, and `cycle:`
 metadata setup.
 
+## Workflow Hook Repository
+
+The root `WORKFLOW.md` is public-safe and does not hardcode this repository's
+owner/name. If you run that workflow directly with Symphony-style hooks, set
+the target repository in the agent environment:
+
+```sh
+export CYCLE_WORKFLOW_REPOSITORY=OWNER/REPO
+```
+
+The hook uses that value for `gh repo clone`, fallback `git clone`, PR lookup,
+PR creation, review feedback lookup, check inspection, merge, and terminal
+cleanup. Cycle CLI commands do not require this variable; it is only for the
+repo-owned workflow hook execution context.
+
 ## Engine Install
 
 Install the default Symphony engine:

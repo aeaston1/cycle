@@ -72,6 +72,20 @@ defmodule Cycle.ProjectMetadataTest do
     assert %{path: "cycle.repo", reason: "must be an HTTPS GitHub repo URL"} in errors
   end
 
+  test "first cycle metadata block is authoritative" do
+    assert {:error, errors} =
+             ProjectMetadata.parse("""
+             cycle:
+               enabled: true
+
+             cycle:
+               enabled: true
+               repo: https://github.com/OWNER/REPO.git
+             """)
+
+    assert %{path: "cycle.repo", reason: "must be an HTTPS GitHub repo URL"} in errors
+  end
+
   test "disabled projects are not valid opted-in projects" do
     assert {:error, errors} =
              ProjectMetadata.parse("""

@@ -18,6 +18,7 @@ defmodule Mix.Tasks.Release.Artifact do
          :ok <- require_clean_output(root),
          :ok <- build_escript(tag),
          {:ok, archive} <- stage_and_archive(root, tag),
+         :ok <- validate_packaged_executable(archive, tag),
          :ok <- validate_archive(archive),
          {:ok, checksum} <- write_checksum(archive) do
       Mix.shell().info("Built #{Path.relative_to_cwd(archive)}")
@@ -108,6 +109,36 @@ defmodule Mix.Tasks.Release.Artifact do
       {:ok, []} -> :ok
       {:ok, findings} -> {:error, release_scan_error(findings)}
       {:error, message} -> {:error, "release artifact validation #{message}"}
+    end
+  end
+
+  defp validate_packaged_executable(archive, tag) do
+    tmp =
+      Path.join([
+        System.tmp_dir!(),
+        "cycle-artifact-smoke-#{System.unique_integer([:positive, :monotonic])}"
+      ])
+
+    File.rm_rf!(tmp)
+    File.mkdir_p!(tmp)
+
+    try do
+      with {_, 0} <- System.cmd("tar", ["-xzf", archive, "-C", tmp], stderr_to_stdout: true),
+           executable <- Path.join([tmp, "cycle-#{tag}", "bin", "cycle"]),
+           true <- File.exists?(executable),
+           {output, 0} <- System.cmd(executable, ["--version"], stderr_to_stdout: true),
+           true <- String.trim(output) == "cycle #{String.trim_leading(tag, "v")}" do
+        :ok
+      else
+        {output, status} ->
+          {:error,
+           "packaged executable smoke failed with status #{status}: #{String.trim(output)}"}
+
+        false ->
+          {:error, "packaged executable smoke failed"}
+      end
+    after
+      File.rm_rf!(tmp)
     end
   end
 

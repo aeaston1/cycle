@@ -56,6 +56,7 @@ defmodule Cycle.Config do
              cli
            ),
          {:ok, interpolated} <- interpolate(merged, env, home),
+         :ok <- reject_relative_state_paths(interpolated),
          config_with_secrets <- resolve_secrets(interpolated, env, legacy_key),
          config <- to_struct(config_with_secrets),
          {:ok, validated} <- Validation.validate(config) do
@@ -353,6 +354,37 @@ defmodule Cycle.Config do
 
   defp expand_path("~/" <> rest, home), do: Path.expand(rest, home)
   defp expand_path(value, _home), do: value
+
+  defp reject_relative_state_paths(config) do
+    errors =
+      [
+        {"paths.state_dir", get_in(config, ["paths", "state_dir"])},
+        {"paths.logs_dir", get_in(config, ["paths", "logs_dir"])},
+        {"paths.engines_dir", get_in(config, ["paths", "engines_dir"])},
+        {"projects.registry_path", get_in(config, ["projects", "registry_path"])},
+        {"projects.workflow_cache_path", get_in(config, ["projects", "workflow_cache_path"])},
+        {"engines.registry_path", get_in(config, ["engines", "registry_path"])},
+        {"engines.lock_path", get_in(config, ["engines", "lock_path"])},
+        {"engines.install_root", get_in(config, ["engines", "install_root"])},
+        {"service.logs.path", get_in(config, ["service", "logs", "path"])}
+      ]
+      |> Enum.flat_map(fn
+        {path, value} when is_binary(value) ->
+          if Path.type(value) == :absolute do
+            []
+          else
+            [%{path: path, reason: "must be an absolute path"}]
+          end
+
+        _entry ->
+          []
+      end)
+
+    case errors do
+      [] -> :ok
+      errors -> {:error, errors}
+    end
+  end
 
   defp to_struct(config) do
     %__MODULE__{
