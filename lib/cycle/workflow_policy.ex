@@ -154,7 +154,7 @@ defmodule Cycle.WorkflowPolicy do
     |> validate_string(review_judge, "review_state", "review_judge.review_state")
     |> validate_string(review_judge, "proceed_state", "review_judge.proceed_state")
     |> validate_string(review_judge, "policy", "review_judge.policy")
-    |> validate_number(
+    |> validate_confidence(
       review_judge,
       "minimum_skip_confidence",
       "review_judge.minimum_skip_confidence"
@@ -312,11 +312,16 @@ defmodule Cycle.WorkflowPolicy do
     end
   end
 
-  defp validate_number(errors, map, key, path) do
+  defp validate_confidence(errors, map, key, path) do
     case Map.fetch(map, key) do
-      {:ok, value} when is_number(value) -> errors
-      {:ok, _value} -> [%{path: path, reason: "must be a number"} | errors]
-      :error -> errors
+      {:ok, value} when value in ["low", "medium", "high"] ->
+        errors
+
+      {:ok, _value} ->
+        [%{path: path, reason: "must be one of: low, medium, high"} | errors]
+
+      :error ->
+        errors
     end
   end
 

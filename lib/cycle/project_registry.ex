@@ -92,6 +92,7 @@ defmodule Cycle.ProjectRegistry do
     |> List.flatten()
     |> Kernel.++(validate_linear_project(project["linear_project"], "#{path}.linear_project"))
     |> Kernel.++(validate_repo(project, "#{path}.repo"))
+    |> Kernel.++(validate_repo_url(project["repo"], "#{path}.repo.url"))
     |> Kernel.++(validate_workflow(project, "#{path}.workflow"))
   end
 
@@ -111,6 +112,18 @@ defmodule Cycle.ProjectRegistry do
   end
 
   defp validate_repo(_project, _path), do: []
+
+  defp validate_repo_url(%{"url" => url}, path) when is_binary(url) do
+    uri = URI.parse(url)
+
+    if uri.userinfo do
+      [Schema.error(path, "must not contain credentials")]
+    else
+      []
+    end
+  end
+
+  defp validate_repo_url(_repo, _path), do: []
 
   defp validate_workflow(%{"status" => "invalid"}, _path), do: []
   defp validate_workflow(%{"workflow" => nil}, path), do: [Schema.error(path, "is required")]

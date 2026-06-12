@@ -134,7 +134,8 @@ defmodule Cycle.CLI do
              "--api-key" => :token,
              "--from-env" => :from_env,
              "--print" => :print
-           }) do
+           }),
+         :ok <- require_single_linear_configure_mode(opts) do
       cond do
         Map.get(opts, :print) ->
           puts("config file: #{config_file()}")
@@ -169,6 +170,22 @@ defmodule Cycle.CLI do
     end
   end
 
+  defp require_single_linear_configure_mode(opts) do
+    modes =
+      [
+        opts[:from_env],
+        Map.has_key?(opts, :token),
+        opts[:print]
+      ]
+      |> Enum.count(& &1)
+
+    if modes > 1 do
+      {:error, "choose only one of --from-env, --api-key, or --print", 1}
+    else
+      :ok
+    end
+  end
+
   defp write_linear_config(token, source) do
     File.mkdir_p!(config_home())
 
@@ -190,18 +207,22 @@ defmodule Cycle.CLI do
 
   defp symphony_install(args) do
     with {:ok, opts} <-
-           parse_options(args, %{repo: @default_symphony_repo, ref: @default_symphony_ref}, %{
+           parse_options(args, %{}, %{
              "--repo" => :repo,
              "--version" => :ref,
              "--ref" => :ref
            }),
-         {:ok, config} <- Cycle.Config.load(cli: engine_cli(opts.repo, opts.ref)),
-         {:ok, engine_id} <- engine_id_for(config, opts.ref),
+         {:ok, base_config} <- Cycle.Config.load(),
+         defaults <- symphony_defaults(base_config),
+         repo <- opts[:repo] || defaults.repo,
+         ref <- opts[:ref] || defaults.ref,
+         {:ok, config} <- Cycle.Config.load(cli: engine_cli(repo, ref)),
+         {:ok, engine_id} <- engine_id_for(config, ref),
          :ok <- require_command("git") do
       target = Cycle.EngineRegistry.install_path(config, engine_id)
 
       with :ok <- validate_engine_target(config, target),
-           :ok <- install_or_update_symphony(target, opts.repo, opts.ref) do
+           :ok <- install_or_update_symphony(target, repo, ref) do
         verify_symphony_checkout(config, engine_id, target)
       end
     end
@@ -254,12 +275,14 @@ defmodule Cycle.CLI do
 
   defp symphony_path(args) do
     with {:ok, opts} <-
-           parse_options(args, %{ref: @default_symphony_ref}, %{
+           parse_options(args, %{}, %{
              "--version" => :ref,
              "--ref" => :ref
            }),
          {:ok, config} <- Cycle.Config.load(),
-         {:ok, engine_id} <- engine_id_for(config, opts.ref) do
+         defaults <- symphony_defaults(config),
+         ref <- opts[:ref] || defaults.ref,
+         {:ok, engine_id} <- engine_id_for(config, ref) do
       registry_path = get_in(config.engines, ["registry_path"])
 
       engine =
@@ -276,6 +299,15 @@ defmodule Cycle.CLI do
     end
   end
 
+  defp symphony_defaults(config) do
+    managed = get_in(config.engines, ["managed", "openai-symphony"]) || %{}
+
+    %{
+      repo: managed["repo"] || @default_symphony_repo,
+      ref: managed["default_ref"] || @default_symphony_ref
+    }
+  end
+
   defp project(["opt-in" | rest]), do: project_opt_in(rest)
   defp project(["discover" | rest]), do: project_discover(rest)
   defp project([]), do: {:error, "missing project subcommand", 1}
@@ -284,10 +316,22 @@ defmodule Cycle.CLI do
   defp project_opt_in(args) do
     with {:ok, opts} <- parse_options(args, %{}, %{"--repo" => :repo}) do
       if present?(opts[:repo]) do
-        puts("cycle:\n  enabled: true\n  repo: #{opts.repo}")
+        with {:ok, metadata} <- validate_project_opt_in_repo(opts.repo) do
+          puts("cycle:\n  enabled: true\n  repo: #{metadata.repo_url}")
+        end
       else
         {:error, "project opt-in requires --repo", 1}
       end
+    end
+  end
+
+  defp validate_project_opt_in_repo(repo) do
+    yaml = "cycle:\n  enabled: true\n  repo: #{Jason.encode!(repo)}\n"
+
+    case Cycle.ProjectMetadata.parse(yaml) do
+      {:ok, metadata} -> {:ok, metadata}
+      {:error, errors} -> {:error, format_config_errors(errors), 1}
+      :not_opted_in -> {:error, "project opt-in requires cycle metadata", 1}
     end
   end
 
@@ -801,7 +845,7 @@ defmodule Cycle.CLI do
   defp discovery_error(reason), do: inspect(reason)
 
   defp validate_limit(limit) do
-    if String.match?(to_string(limit), ~r/^[0-9]+$/),
+    if String.match?(to_string(limit), ~r/^[1-9][0-9]*$/),
       do: :ok,
       else: {:error, "--limit must be a positive integer", 1}
   end

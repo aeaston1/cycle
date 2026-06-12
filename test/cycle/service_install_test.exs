@@ -83,8 +83,23 @@ defmodule Cycle.Service.InstallTest do
 
       assert File.read!(ctx.service_path) == result.rendered_service
       assert File.read!(result.env_file_path) =~ "CYCLE_HOME=#{ctx.cycle_home}"
+      assert File.read!(result.env_file_path) =~ "LINEAR_API_KEY=lin_test"
+      assert {:ok, %{mode: mode}} = File.stat(result.env_file_path)
+      assert Bitwise.band(mode, 0o777) == 0o600
       assert_received {:command, ["systemctl", "--user", "daemon-reload"]}
       assert_received {:command, ["systemctl", "--user", "enable", "cycle.service"]}
+    end)
+  end
+
+  test "service install accepts custom configured linear api env" do
+    with_install_env(%{"LINEAR_API_KEY" => "", "CUSTOM_LINEAR_TOKEN" => "lin_custom"}, fn ctx ->
+      write_config!(ctx.config_home, "linear:\n  api_key_env: CUSTOM_LINEAR_TOKEN\n")
+
+      assert {:ok, result} =
+               Install.install(base_opts(ctx, yes: true, service_path: ctx.service_path))
+
+      assert File.read!(result.env_file_path) =~ "CUSTOM_LINEAR_TOKEN=lin_custom"
+      refute File.read!(result.env_file_path) =~ "LINEAR_API_KEY=lin_custom"
     end)
   end
 

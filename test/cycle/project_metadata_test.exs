@@ -105,6 +105,17 @@ defmodule Cycle.ProjectMetadataTest do
     assert %{path: "cycle.repo", reason: "must be an HTTPS GitHub repo URL"} in errors
   end
 
+  test "credentialed repo urls are rejected" do
+    assert {:error, errors} =
+             ProjectMetadata.parse("""
+             cycle:
+               enabled: true
+               repo: https://token@github.com/OWNER/REPO.git
+             """)
+
+    assert %{path: "cycle.repo", reason: "must be an HTTPS GitHub repo URL"} in errors
+  end
+
   test "non-positive capacity values are rejected" do
     assert {:error, errors} =
              ProjectMetadata.parse("""

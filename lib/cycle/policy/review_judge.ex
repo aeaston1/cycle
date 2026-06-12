@@ -246,12 +246,17 @@ defmodule Cycle.Policy.ReviewJudge do
       name = item |> Map.get("name", "") |> to_string() |> String.downcase()
       status = item |> Map.get("status", "") |> to_string() |> String.downcase()
 
-      type in ["validation", "test", "tests", "check"] or
-        String.contains?(name, "test") or status in ["passed", "ok", "success"]
+      status in ["passed", "ok", "success"] and
+        (type in ["validation", "test", "tests", "check"] or
+           validation_name?(name))
     end)
   end
 
   defp validation_evidence?(_evidence), do: false
+
+  defp validation_name?(name) do
+    Regex.match?(~r/(^|[^a-z0-9])(test|tests|check|checks|ci|smoke)([^a-z0-9]|$)/, name)
+  end
 
   defp normalize_output(output) when is_map(output), do: {:ok, stringify_keys(output)}
 

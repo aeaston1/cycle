@@ -8,6 +8,7 @@ defmodule Cycle.SecurityTest do
       Cycle.Security.redact(%{
         "Authorization" => "Bearer #{@fake_token}",
         "message" => "clone https://user:#{@fake_token}@github.com/OWNER/REPO.git",
+        "repo_url" => "clone https://#{@fake_token}@github.com/OWNER/REPO.git",
         "nested" => %{"api_key" => @fake_token}
       })
 
@@ -17,6 +18,7 @@ defmodule Cycle.SecurityTest do
     assert redacted["Authorization"] == "[REDACTED]"
     assert redacted["nested"]["api_key"] == "[REDACTED]"
     assert redacted["message"] =~ "https://[REDACTED]@github.com/OWNER/REPO.git"
+    assert redacted["repo_url"] =~ "https://[REDACTED]@github.com/OWNER/REPO.git"
   end
 
   test "public docs scan allows the Homebrew tap and rejects private repo names" do

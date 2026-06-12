@@ -108,6 +108,33 @@ defmodule Cycle.Registry.SchemaTest do
     assert %{path: "$.engines[0].source", reason: "must not contain credentials"} in errors
   end
 
+  test "engine registry write refuses invalid credentialed source urls" do
+    registry = %EngineRegistry{
+      engines: [
+        %EngineRegistry.Engine{
+          id: "openai-symphony@main",
+          name: "openai-symphony",
+          source: "https://token@github.com/OWNER/REPO.git",
+          ref: "main",
+          install_path: "/tmp/cycle/engines/openai-symphony/main",
+          capabilities: %{},
+          health: %{"state" => "missing"},
+          capacity: %{}
+        }
+      ]
+    }
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-invalid-engine-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    assert {:error, errors} = EngineRegistry.write(path, registry)
+    assert %{path: "$.engines[0].source", reason: "must not contain credentials"} in errors
+    refute File.exists?(path)
+  end
+
   test "run registry schema validates and round trips" do
     raw = %{
       "schema_version" => 1,
@@ -163,6 +190,18 @@ defmodule Cycle.Registry.SchemaTest do
 
     assert {:error, errors} = ProjectRegistry.validate(raw)
     assert %{path: "$.projects[0].repo.token", reason: "secret fields are not allowed"} in errors
+  end
+
+  test "project registry rejects credentialed repo urls" do
+    raw =
+      project_registry(%{
+        "projects" => [
+          put_in(project_record(), ["repo", "url"], "https://token@github.com/OWNER/REPO.git")
+        ]
+      })
+
+    assert {:error, errors} = ProjectRegistry.validate(raw)
+    assert %{path: "$.projects[0].repo.url", reason: "must not contain credentials"} in errors
   end
 
   defp project_registry(overrides) do

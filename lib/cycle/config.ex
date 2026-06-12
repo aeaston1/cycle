@@ -38,13 +38,14 @@ defmodule Cycle.Config do
   """
   @spec load([load_option()]) :: {:ok, %__MODULE__{}} | {:error, [Validation.error()]}
   def load(opts \\ []) do
-    env = Map.new(Keyword.get(opts, :env, System.get_env()))
+    raw_env = Map.new(Keyword.get(opts, :env, System.get_env()))
     home = Keyword.get(opts, :home, System.user_home!())
-    config_path = Keyword.get(opts, :config_path, Paths.config_file(env, home))
-    workflow = Keyword.get(opts, :workflow, %{}) || %{}
-    cli = Keyword.get(opts, :cli, %{}) || %{}
 
-    with {:ok, file_config} <- read_config_file(config_path),
+    with {:ok, env} <- merge_cycle_env_file(raw_env),
+         config_path <- Keyword.get(opts, :config_path, Paths.config_file(env, home)),
+         workflow <- Keyword.get(opts, :workflow, %{}) || %{},
+         cli <- Keyword.get(opts, :cli, %{}) || %{},
+         {:ok, file_config} <- read_config_file(config_path),
          {:ok, legacy_key} <- read_legacy_linear_key(Paths.legacy_config_file(env, home)),
          {:ok, merged} <-
            merge_layers(
@@ -55,7 +56,8 @@ defmodule Cycle.Config do
              cli
            ),
          {:ok, interpolated} <- interpolate(merged, env, home),
-         config <- to_struct(interpolated),
+         config_with_secrets <- resolve_secrets(interpolated, env, legacy_key),
+         config <- to_struct(config_with_secrets),
          {:ok, validated} <- Validation.validate(config) do
       {:ok, validated}
     end
@@ -91,6 +93,48 @@ defmodule Cycle.Config do
     end
   end
 
+  defp merge_cycle_env_file(env) do
+    case Map.get(env, "CYCLE_ENV_FILE") do
+      path when is_binary(path) and path != "" ->
+        with {:ok, file_env} <- read_env_file(path) do
+          {:ok, Map.merge(file_env, env)}
+        end
+
+      _ ->
+        {:ok, env}
+    end
+  end
+
+  defp read_env_file(path) do
+    case File.read(path) do
+      {:ok, text} ->
+        {:ok, parse_env_file(text)}
+
+      {:error, reason} ->
+        {:error, [%{path: "CYCLE_ENV_FILE", reason: "could not read #{path}: #{reason}"}]}
+    end
+  end
+
+  defp parse_env_file(text) do
+    text
+    |> String.split("\n")
+    |> Enum.reduce(%{}, fn line, acc ->
+      line = String.trim(line)
+
+      cond do
+        line == "" or String.starts_with?(line, "#") ->
+          acc
+
+        String.contains?(line, "=") ->
+          [key, value] = String.split(line, "=", parts: 2)
+          Map.put(acc, key, value)
+
+        true ->
+          acc
+      end
+    end)
+  end
+
   defp read_legacy_linear_key(path) do
     if File.exists?(path) do
       case File.read(path) do
@@ -124,6 +168,37 @@ defmodule Cycle.Config do
        defaults,
        &deep_merge(&2, stringify_keys(&1))
      )}
+  end
+
+  defp resolve_secrets(config, env, legacy_key) do
+    linear = Map.get(config, "linear", %{})
+    configured_env = Map.get(linear, "api_key_env") || "LINEAR_API_KEY"
+
+    token =
+      first_present([
+        get_in(config, ["secrets", "linear_api_key"]),
+        Map.get(env, configured_env),
+        Map.get(linear, "api_key"),
+        legacy_key
+      ])
+
+    config
+    |> put_secret(token)
+    |> drop_linear_api_key()
+  end
+
+  defp first_present(values) do
+    Enum.find(values, fn value -> is_binary(value) and String.trim(value) != "" end)
+  end
+
+  defp put_secret(config, nil), do: config
+
+  defp put_secret(config, token) do
+    put_in_path(config, ["secrets", "linear_api_key"], token)
+  end
+
+  defp drop_linear_api_key(config) do
+    Map.update(config, "linear", %{}, &Map.delete(&1 || %{}, "api_key"))
   end
 
   defp defaults(env, home) do
@@ -194,9 +269,7 @@ defmodule Cycle.Config do
     }
   end
 
-  defp env_layer(env, legacy_key) do
-    api_key_env = Map.get(env, "LINEAR_API_KEY") || legacy_key
-
+  defp env_layer(env, _legacy_key) do
     %{}
     |> put_if_present(["paths", "state_dir"], Map.get(env, "CYCLE_HOME"))
     |> put_if_present(["paths", "logs_dir"], env_path(env, "CYCLE_HOME", "logs"))
@@ -214,7 +287,6 @@ defmodule Cycle.Config do
       ["engines", "managed", "openai-symphony", "default_ref"],
       Map.get(env, "CYCLE_SYMPHONY_REF")
     )
-    |> put_if_present(["secrets", "linear_api_key"], api_key_env)
   end
 
   defp env_path(env, key, suffix) do

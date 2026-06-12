@@ -79,6 +79,9 @@ defmodule Cycle.Config.Validation do
     uri = URI.parse(value)
 
     cond do
+      uri.userinfo ->
+        [%{path: path, reason: "must not contain credentials"} | errors]
+
       uri.scheme in ["http", "https", "git", "ssh"] and is_binary(uri.host) ->
         errors
 

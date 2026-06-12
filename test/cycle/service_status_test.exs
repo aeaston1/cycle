@@ -47,6 +47,34 @@ defmodule Cycle.Service.StatusTest do
     refute Enum.any?(command_words, &(&1 in @mutating_verbs))
   end
 
+  test "launchd status uses the installer label and LaunchAgents path" do
+    home = tmp_path()
+
+    snapshot =
+      Status.snapshot(
+        home: home,
+        env: %{"CYCLE_HOME" => tmp_path(), "XDG_CONFIG_HOME" => tmp_path()},
+        command_finder: fn
+          "systemctl" -> nil
+          "launchctl" -> "/bin/launchctl"
+          _command -> nil
+        end,
+        command_runner: fn
+          "launchctl", ["print", "gui/" <> target], _opts ->
+            assert String.ends_with?(target, "/dev.cycle.agent")
+            {"pid = 4321\n", 0}
+        end,
+        api_get: fn _url, _opts -> {:error, :econnrefused} end
+      )
+
+    assert snapshot["service"]["manager"] == "launchd"
+    assert snapshot["service"]["name"] == "dev.cycle.agent"
+    assert snapshot["service"]["state"] == "running"
+
+    assert snapshot["service"]["file_path"] ==
+             Path.join([home, "Library", "LaunchAgents", "dev.cycle.agent.plist"])
+  end
+
   test "json snapshot has stable top-level keys" do
     snapshot = snapshot_with_systemd("LoadState=not-found\nActiveState=inactive\nMainPID=0\n", 1)
 
@@ -66,8 +94,12 @@ defmodule Cycle.Service.StatusTest do
     Status.snapshot(
       home: System.tmp_dir!(),
       env: %{"CYCLE_HOME" => tmp_path(), "XDG_CONFIG_HOME" => tmp_path()},
+      command_finder: fn
+        "systemctl" -> "/bin/systemctl"
+        _command -> nil
+      end,
       command_runner: fn
-        "systemctl", ["show", "cycle.service" | _rest], _opts -> {output, status}
+        "systemctl", ["--user", "show", "cycle.service" | _rest], _opts -> {output, status}
       end,
       api_get: fn _url, _opts -> {:error, :econnrefused} end
     )

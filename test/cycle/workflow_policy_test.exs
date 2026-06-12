@@ -32,7 +32,7 @@ defmodule Cycle.WorkflowPolicyTest do
                review_state: Human Review
                proceed_state: Done
                policy: very_lenient
-               minimum_skip_confidence: 0.8
+               minimum_skip_confidence: high
                hard_require_human_review: false
              worker:
                ssh_hosts:
@@ -63,7 +63,7 @@ defmodule Cycle.WorkflowPolicyTest do
     assert policy.review_judge["review_state"] == "Human Review"
     assert policy.review_judge["proceed_state"] == "Done"
     assert policy.review_judge["policy"] == "very_lenient"
-    assert policy.review_judge["minimum_skip_confidence"] == 0.8
+    assert policy.review_judge["minimum_skip_confidence"] == "high"
     assert policy.review_judge["hard_require_human_review"] == false
     assert policy.worker["ssh_hosts"] == ["worker-1"]
     assert policy.worker["max_concurrent_agents_per_host"] == 2
@@ -113,7 +113,7 @@ defmodule Cycle.WorkflowPolicyTest do
                active_states: Todo
              review_judge:
                enabled: yes
-               minimum_skip_confidence: high
+               minimum_skip_confidence: 0.8
              worker:
                ssh_hosts: worker-1
                max_concurrent_agents_per_host: 0
@@ -130,7 +130,12 @@ defmodule Cycle.WorkflowPolicyTest do
 
     assert %{path: "tracker.active_states", reason: "must be a list of strings"} in errors
     assert %{path: "review_judge.enabled", reason: "must be a boolean"} in errors
-    assert %{path: "review_judge.minimum_skip_confidence", reason: "must be a number"} in errors
+
+    assert %{
+             path: "review_judge.minimum_skip_confidence",
+             reason: "must be one of: low, medium, high"
+           } in errors
+
     assert %{path: "worker.ssh_hosts", reason: "must be a list of strings"} in errors
 
     assert %{

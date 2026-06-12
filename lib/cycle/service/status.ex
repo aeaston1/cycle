@@ -4,9 +4,8 @@ defmodule Cycle.Service.Status do
   """
 
   alias Cycle.Config
+  alias Cycle.Service.Install
 
-  @service_name "cycle.service"
-  @launchd_label "homebrew.mxcl.cycle"
   @mutating_verbs ~w(start stop restart reload enable disable bootout bootstrap kickstart unload load)
 
   @type snapshot :: map()
@@ -16,6 +15,7 @@ defmodule Cycle.Service.Status do
     env = Keyword.get(opts, :env, System.get_env())
     home = Keyword.get(opts, :home, System.user_home!())
     command_runner = Keyword.get(opts, :command_runner, &System.cmd/3)
+    command_finder = Keyword.get(opts, :command_finder, &System.find_executable/1)
     api_get = Keyword.get(opts, :api_get, &Req.get/2)
 
     config =
@@ -25,7 +25,7 @@ defmodule Cycle.Service.Status do
       end
 
     paths = paths(config, env, home)
-    service = service_status(command_runner)
+    service = service_status(command_runner, command_finder, home)
 
     %{
       "service" => %{
@@ -50,17 +50,17 @@ defmodule Cycle.Service.Status do
   @spec mutating_verbs :: [String.t()]
   def mutating_verbs, do: @mutating_verbs
 
-  defp service_status(command_runner) do
+  defp service_status(command_runner, command_finder, home) do
     cond do
-      System.find_executable("systemctl") ->
+      command_finder.("systemctl") ->
         systemd_status(command_runner)
 
-      System.find_executable("launchctl") ->
-        launchd_status(command_runner)
+      command_finder.("launchctl") ->
+        launchd_status(command_runner, home)
 
       true ->
         %{
-          name: @service_name,
+          name: service_name(),
           manager: "unknown",
           installed: "unknown",
           state: "unknown",
@@ -74,8 +74,9 @@ defmodule Cycle.Service.Status do
 
   defp systemd_status(command_runner) do
     args = [
+      "--user",
       "show",
-      @service_name,
+      service_name(),
       "--property=LoadState,ActiveState,SubState,MainPID,FragmentPath",
       "--no-page"
     ]
@@ -88,7 +89,7 @@ defmodule Cycle.Service.Status do
     file_path = blank_to_nil(Map.get(fields, "FragmentPath"))
 
     %{
-      name: @service_name,
+      name: service_name(),
       manager: "systemd",
       installed: installed?(load_state, exit_status, file_path),
       state: systemd_state(load_state, active_state, exit_status),
@@ -99,18 +100,18 @@ defmodule Cycle.Service.Status do
     }
   end
 
-  defp launchd_status(command_runner) do
-    target = "gui/#{System.get_env("UID") || "501"}/#{@launchd_label}"
+  defp launchd_status(command_runner, home) do
+    target = "gui/#{System.get_env("UID") || "501"}/#{launchd_label()}"
     args = ["print", target]
     {output, exit_status} = command_runner.("launchctl", args, stderr_to_stdout: true)
 
     %{
-      name: @launchd_label,
+      name: launchd_label(),
       manager: "launchd",
       installed: if(exit_status == 0, do: true, else: false),
       state: launchd_state(output, exit_status),
       pid: launchd_pid(output),
-      file_path: launchd_plist_path(),
+      file_path: launchd_plist_path(home),
       guidance: if(exit_status == 0, do: nil, else: "Cycle launchd service is not loaded"),
       commands_checked: [["launchctl" | args]]
     }
@@ -151,18 +152,11 @@ defmodule Cycle.Service.Status do
     end
   end
 
-  defp launchd_plist_path do
-    homebrew = System.find_executable("brew")
+  defp launchd_plist_path(home),
+    do: Path.join([home, "Library", "LaunchAgents", "#{launchd_label()}.plist"])
 
-    if homebrew do
-      {prefix, 0} = System.cmd(homebrew, ["--prefix"], stderr_to_stdout: true)
-      Path.join([String.trim(prefix), "opt", "cycle", "homebrew.mxcl.cycle.plist"])
-    else
-      nil
-    end
-  rescue
-    _ -> nil
-  end
+  defp service_name, do: Install.systemd_service_name()
+  defp launchd_label, do: Install.launchd_label()
 
   defp paths(%Config{} = config, _env, _home) do
     %{config_path: config.paths.config_file, state_path: config.paths.state_dir}

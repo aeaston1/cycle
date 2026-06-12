@@ -44,6 +44,9 @@ defmodule Cycle.Scheduler do
     |> allocate_capacity(context)
   end
 
+  @spec active_run_states :: [String.t()]
+  def active_run_states, do: @active_run_states
+
   @spec dispatch_supported?(module(), EngineRegistry.Engine.t()) :: boolean()
   def dispatch_supported?(adapter, %EngineRegistry.Engine{} = engine) do
     Cycle.Engine.Adapter.dispatch_supported?(adapter, engine)

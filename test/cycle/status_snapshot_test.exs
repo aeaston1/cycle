@@ -128,8 +128,16 @@ defmodule Cycle.StatusSnapshotTest do
                "last_event" => %{"reason_code" => "engine_unhealthy"}
              } = Enum.find(snapshot["runs"]["details"], &(&1["state"] == "retrying"))
 
-      assert snapshot["capacity"]["global"] == %{"used" => 2, "available" => 8, "limit" => 10}
-      assert snapshot["capacity"]["projects"]["project-id"]["used"] == 1
+      assert snapshot["capacity"]["global"] == %{"used" => 4, "available" => 6, "limit" => 10}
+      assert snapshot["capacity"]["projects"]["project-id"]["used"] == 4
+
+      assert snapshot["capacity"]["states"]["Todo"] == %{
+               "used" => 4,
+               "available" => 0,
+               "limit" => 2
+             }
+
+      assert snapshot["capacity"]["engines"]["openai-symphony@main"]["used"] == 4
       assert snapshot["capacity"]["engines"]["openai-symphony@main"]["limit"] == 3
       assert snapshot["drift"]["count"] == 1
       assert [%{"path" => "review_judge.policy", "project" => "Cycle"}] = snapshot["drift"]["top"]
@@ -263,7 +271,10 @@ defmodule Cycle.StatusSnapshotTest do
                "projects" => [
                  project_record(%{
                    "status" => "drift",
-                   "capacity" => %{"max_concurrent_agents" => 2},
+                   "capacity" => %{
+                     "max_concurrent_agents" => 2,
+                     "max_concurrent_agents_by_state" => %{"Todo" => 2}
+                   },
                    "policy_drift" => %{
                      "status" => "drift",
                      "records" => [%{"path" => "review_judge.policy"}]
@@ -402,7 +413,7 @@ defmodule Cycle.StatusSnapshotTest do
   defp run_record(id, state) do
     %{
       "id" => id,
-      "issue" => %{"id" => "issue-id", "identifier" => "AEA-165"},
+      "issue" => %{"id" => "issue-id", "identifier" => "AEA-165", "state" => "Todo"},
       "project" => %{"id" => "project-id", "name" => "Cycle"},
       "engine" => %{"id" => "openai-symphony@main", "name" => "Symphony"},
       "workflow_path" => "WORKFLOW.md",

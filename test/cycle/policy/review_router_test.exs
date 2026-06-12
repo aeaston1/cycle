@@ -109,6 +109,7 @@ defmodule Cycle.Policy.ReviewRouterTest do
     assert body =~ "Decision: require_human_review"
     assert body =~ EvidenceHash.marker_line(@hash)
     assert_received {:move, "issue-id", "Human Review"}
+    assert [%{"message" => "review is required"}] = result.details["hard_stops"]
   end
 
   test "proceed decision posts comment before moving to proceed state" do
@@ -270,7 +271,12 @@ defmodule Cycle.Policy.ReviewRouterTest do
       decision: "require_human_review",
       confidence: "high",
       reason: "Sensitive change.",
-      hard_stops: [%Cycle.Policy.ReviewJudge.HardStop{code: :sensitive_surface}]
+      hard_stops: [
+        %Cycle.Policy.ReviewJudge.HardStop{
+          code: :sensitive_surface,
+          message: "review is required"
+        }
+      ]
     }
   end
 

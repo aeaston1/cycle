@@ -358,7 +358,7 @@ defmodule Cycle.Policy.ReviewRouter do
     Enum.map(stops, fn stop ->
       %{
         "code" => stop |> Map.get(:code) |> to_string(),
-        "reason" => Map.get(stop, :reason),
+        "message" => Map.get(stop, :message),
         "details" => Map.get(stop, :details) || %{}
       }
     end)

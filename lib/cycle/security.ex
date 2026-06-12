@@ -8,7 +8,7 @@ defmodule Cycle.Security do
   @basic ~r/\bBasic\s+[A-Za-z0-9._~+\/=-]+/i
   @assignment ~r/\b([A-Za-z0-9_.-]*(?:token|secret|api[_-]?key)[A-Za-z0-9_.-]*)=([^\s]+)/i
   @long_token ~r/\b(?=[A-Za-z0-9._~+=-]{32,}\b)(?=[A-Za-z0-9._~+=-]*[0-9])[A-Za-z0-9._~+=-]{32,}\b/
-  @credentialed_url ~r{(https?://)[^/\s:@]+:[^/\s@]+@}i
+  @credentialed_url ~r{(https?://)[^/\s@]+@}i
 
   @public_doc_paths ["README.md", "docs", "packaging", "skills", ".env.example"]
   @allowed_private_strings ["aeaston1/tap/cycle"]

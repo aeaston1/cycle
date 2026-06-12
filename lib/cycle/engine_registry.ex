@@ -54,7 +54,11 @@ defmodule Cycle.EngineRegistry do
   end
 
   def write(path, %__MODULE__{} = registry) when is_binary(path) do
-    Store.write(path, to_map(registry))
+    raw = to_map(registry)
+
+    with :ok <- validate(raw) do
+      Store.write(path, raw)
+    end
   end
 
   def read_lock(path) when is_binary(path) do
@@ -65,7 +69,11 @@ defmodule Cycle.EngineRegistry do
   end
 
   def write_lock(path, %LockRegistry{} = registry) when is_binary(path) do
-    Store.write(path, lock_to_map(registry))
+    raw = lock_to_map(registry)
+
+    with :ok <- validate_lock_registry(raw) do
+      Store.write(path, raw)
+    end
   end
 
   def default_record(config, engine_id) do

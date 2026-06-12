@@ -123,6 +123,25 @@ defmodule Cycle.Policy.ReviewEvidenceTest do
       assert {git, []} = ReviewEvidence.inspect_workspace(root, true)
       assert git["has_changes"] == true
       assert git["changed_files"] == ["README.md", "new.txt"]
+      assert git["change_hash"] =~ ~r/^sha256:[0-9a-f]{64}$/
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  test "inspect_workspace change hash changes when same file content changes" do
+    root = temp_root()
+
+    try do
+      init_git!(root)
+      File.write!(Path.join(root, "README.md"), "changed once\n")
+      assert {first_git, []} = ReviewEvidence.inspect_workspace(root, true)
+
+      File.write!(Path.join(root, "README.md"), "changed twice\n")
+      assert {second_git, []} = ReviewEvidence.inspect_workspace(root, true)
+
+      assert first_git["changed_files"] == second_git["changed_files"]
+      refute first_git["change_hash"] == second_git["change_hash"]
     after
       File.rm_rf!(root)
     end

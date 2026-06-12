@@ -31,6 +31,9 @@ defmodule Cycle.Service.Install do
           dry_run: boolean()
         }
 
+  def systemd_service_name, do: @systemd_service
+  def launchd_label, do: @launchd_label
+
   @spec install(keyword()) :: {:ok, result()} | {:error, String.t(), non_neg_integer()}
   def install(opts \\ []) do
     install = struct(__MODULE__, opts)
@@ -52,7 +55,7 @@ defmodule Cycle.Service.Install do
          commands <- manager_commands(platform, paths.service_path),
          :ok <- maybe_confirm(install, paths.service_path),
          result <- result(platform, paths, rendered, commands, install.dry_run),
-         :ok <- maybe_write(install.dry_run, paths, rendered),
+         :ok <- maybe_write(install.dry_run, paths, rendered, config),
          :ok <- maybe_enable(install.dry_run, commands, command_runner) do
       {:ok, result}
     end
@@ -182,7 +185,9 @@ defmodule Cycle.Service.Install do
         state_path: paths.state_path,
         log_path: paths.log_path,
         env_file_path: paths.env_file_path
-      }, secrets: [config.secrets["linear_api_key"]])
+      },
+      secrets: [config.secrets["linear_api_key"]]
+    )
   end
 
   defp refuse_unrelated_service(path, rendered) do
@@ -217,14 +222,14 @@ defmodule Cycle.Service.Install do
     end
   end
 
-  defp maybe_write(true, _paths, _rendered), do: :ok
+  defp maybe_write(true, _paths, _rendered, _config), do: :ok
 
-  defp maybe_write(false, paths, rendered) do
+  defp maybe_write(false, paths, rendered, config) do
     with :ok <- mkdir_p(Path.dirname(paths.service_path)),
          :ok <- mkdir_p(Path.dirname(paths.env_file_path)),
          :ok <- mkdir_p(Path.dirname(paths.log_path)),
          :ok <- write_file(paths.service_path, rendered),
-         :ok <- write_file(paths.env_file_path, env_file(paths)) do
+         :ok <- write_env_file(paths.env_file_path, env_file(paths, config)) do
       :ok
     end
   end
@@ -269,12 +274,15 @@ defmodule Cycle.Service.Install do
     }
   end
 
-  defp env_file(paths) do
+  defp env_file(paths, config) do
     xdg_config_home = paths.config_path |> Path.dirname() |> Path.dirname()
+    auth_env = get_in(config.linear, ["api_key_env"]) || "LINEAR_API_KEY"
+    auth_token = config.secrets["linear_api_key"]
 
     """
     CYCLE_HOME=#{paths.state_path}
     XDG_CONFIG_HOME=#{xdg_config_home}
+    #{auth_env}=#{auth_token}
     """
   end
 
@@ -289,6 +297,16 @@ defmodule Cycle.Service.Install do
     case File.write(path, content) do
       :ok -> :ok
       {:error, reason} -> {:error, "could not write #{path}: #{reason}", 3}
+    end
+  end
+
+  defp write_env_file(path, content) do
+    with :ok <- write_file(path, content),
+         :ok <- File.chmod(path, 0o600) do
+      :ok
+    else
+      {:error, _message, _code} = error -> error
+      {:error, reason} -> {:error, "could not secure #{path}: #{reason}", 3}
     end
   end
 

@@ -46,6 +46,25 @@ defmodule Cycle.Policy.ReviewJudgeTest do
     assert :missing_validation_evidence in hard_stop_codes(decision)
   end
 
+  test "successful non-validation artifacts do not satisfy validation evidence" do
+    decision =
+      evidence(
+        run_evidence: [%{"type" => "artifact", "name" => "checkout", "status" => "success"}]
+      )
+      |> ReviewJudge.decide(@policy, runner: __MODULE__.ProceedRunner)
+
+    assert decision.decision == "require_human_review"
+    assert :missing_validation_evidence in hard_stop_codes(decision)
+  end
+
+  test "named passing checks satisfy validation evidence" do
+    decision =
+      evidence(run_evidence: [%{"type" => "artifact", "name" => "smoke check", "status" => "ok"}])
+      |> ReviewJudge.decide(@policy, runner: __MODULE__.ProceedRunner)
+
+    assert decision.decision == "proceed_to_merging"
+  end
+
   test "missing required evidence returns require_human_review" do
     decision =
       evidence(

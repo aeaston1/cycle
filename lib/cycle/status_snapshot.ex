@@ -285,7 +285,7 @@ defmodule Cycle.StatusSnapshot do
   end
 
   defp capacity_summary(config, projects, engines, runs) do
-    running = Enum.count(runs, &(&1.state in ["running", "judging"]))
+    running = Enum.count(runs, &active_run?/1)
     global_limit = get_in(config.scheduler, ["max_concurrent_runs"])
 
     %{
@@ -305,7 +305,7 @@ defmodule Cycle.StatusSnapshot do
       limit = get_in(project.capacity || %{}, ["max_concurrent_agents"])
 
       used =
-        Enum.count(runs, &(get_in(&1.project || %{}, ["id"]) == key and &1.state == "running"))
+        Enum.count(runs, &(get_in(&1.project || %{}, ["id"]) == key and active_run?(&1)))
 
       {key || "unknown", capacity(limit, used)}
     end)
@@ -316,9 +316,20 @@ defmodule Cycle.StatusSnapshot do
     |> Enum.flat_map(fn project ->
       project.capacity
       |> Kernel.||(%{})
-      |> Map.get("states", %{})
+      |> Map.get("max_concurrent_agents_by_state", %{})
       |> Enum.map(fn {state, limit} ->
-        used = Enum.count(runs, &(&1.state == state))
+        key =
+          get_in(project.linear_project || %{}, ["id"]) ||
+            get_in(project.linear_project || %{}, ["name"])
+
+        state_key = state_key(state)
+
+        used =
+          Enum.count(runs, fn run ->
+            get_in(run.project || %{}, ["id"]) == key and active_run?(run) and
+              state_key(get_in(run.issue || %{}, ["state"])) == state_key
+          end)
+
         {state, capacity(limit, used)}
       end)
     end)
@@ -330,7 +341,7 @@ defmodule Cycle.StatusSnapshot do
       used =
         Enum.count(
           runs,
-          &(get_in(&1.engine || %{}, ["id"]) == engine.id and &1.state == "running")
+          &(get_in(&1.engine || %{}, ["id"]) == engine.id and active_run?(&1))
         )
 
       {engine.id || "unknown",
@@ -342,6 +353,19 @@ defmodule Cycle.StatusSnapshot do
 
   defp capacity(limit, used),
     do: %{"used" => used, "available" => max(limit - used, 0), "limit" => limit}
+
+  defp active_run?(run), do: run.state in Cycle.Scheduler.active_run_states()
+
+  defp state_key(nil), do: nil
+
+  defp state_key(state) when is_binary(state) do
+    state
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace(~r/[\s-]+/, "_")
+  end
+
+  defp state_key(state) when is_atom(state), do: state |> Atom.to_string() |> state_key()
 
   defp drift_summary(projects) do
     records =

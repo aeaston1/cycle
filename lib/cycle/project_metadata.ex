@@ -271,6 +271,7 @@ defmodule Cycle.ProjectMetadata do
     cond do
       uri.scheme != "https" -> nil
       uri.host != "github.com" -> nil
+      uri.userinfo -> nil
       uri.query || uri.fragment -> nil
       is_nil(uri.path) -> nil
       true -> normalize_github_path(uri.path)

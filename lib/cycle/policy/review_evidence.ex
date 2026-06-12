@@ -188,7 +188,8 @@ defmodule Cycle.Policy.ReviewEvidence do
          {:ok, branch} <- git(path, ["branch", "--show-current"]),
          {:ok, head} <- git(path, ["rev-parse", "--short", "HEAD"]),
          {:ok, tracked} <- git(path, ["diff", "--name-only", "HEAD", "--"]),
-         {:ok, untracked} <- git(path, ["ls-files", "--others", "--exclude-standard"]) do
+         {:ok, untracked} <- git(path, ["ls-files", "--others", "--exclude-standard"]),
+         {:ok, change_hash} <- change_hash(path, lines(untracked)) do
       changed_files =
         (lines(tracked) ++ lines(untracked))
         |> Enum.uniq()
@@ -199,6 +200,7 @@ defmodule Cycle.Policy.ReviewEvidence do
          "branch" => String.trim(branch),
          "head" => String.trim(head),
          "changed_files" => changed_files,
+         "change_hash" => change_hash,
          "has_changes" => changed_files != []
        }, []}
     else
@@ -221,6 +223,26 @@ defmodule Cycle.Policy.ReviewEvidence do
       {output, 0} -> {:ok, output}
       {output, _status} -> {:error, {args, output}}
     end
+  end
+
+  defp change_hash(path, untracked_files) do
+    with {:ok, diff} <- git(path, ["diff", "--binary", "HEAD", "--"]),
+         {:ok, untracked_input} <- untracked_hash_input(path, untracked_files) do
+      {:ok, hash([diff, untracked_input])}
+    end
+  end
+
+  defp untracked_hash_input(path, files) do
+    files
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, []}, fn file, {:ok, acc} ->
+      full_path = Path.join(path, file)
+
+      case File.read(full_path) do
+        {:ok, body} -> {:cont, {:ok, [[file, 0, body] | acc]}}
+        {:error, reason} -> {:halt, {:error, {["read", file], Atom.to_string(reason)}}}
+      end
+    end)
   end
 
   defp normalize_issue(issue) do

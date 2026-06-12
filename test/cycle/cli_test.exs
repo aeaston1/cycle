@@ -95,6 +95,14 @@ defmodule Cycle.CLITest do
     refute File.exists?(Path.join([config_parent, "cycle", "config.env"]))
   end
 
+  test "linear configure rejects mutually exclusive modes" do
+    assert Cycle.CLI.run(["linear", "configure", "--from-env", "--api-key", "lin_test"]) ==
+             {:error, "choose only one of --from-env, --api-key, or --print", 1}
+
+    assert Cycle.CLI.run(["linear", "configure", "--print", "--from-env"]) ==
+             {:error, "choose only one of --from-env, --api-key, or --print", 1}
+  end
+
   test "symphony path prints the managed engine path" do
     with_cycle_home(fn cycle_home ->
       output =
@@ -104,6 +112,22 @@ defmodule Cycle.CLITest do
 
       assert String.trim(output) ==
                Path.join([cycle_home, "engines", "openai-symphony", "test-ref"])
+    end)
+  end
+
+  test "symphony path uses configured default ref when version is omitted" do
+    with_cycle_home(fn cycle_home ->
+      previous_ref = System.get_env("CYCLE_SYMPHONY_REF")
+      System.put_env("CYCLE_SYMPHONY_REF", "release")
+
+      try do
+        output = capture_io(fn -> assert Cycle.CLI.run(["symphony", "path"]) == :ok end)
+
+        assert String.trim(output) ==
+                 Path.join([cycle_home, "engines", "openai-symphony", "release"])
+      after
+        restore_env("CYCLE_SYMPHONY_REF", previous_ref)
+      end
     end)
   end
 
@@ -164,6 +188,31 @@ defmodule Cycle.CLITest do
                })
 
       assert lock.resolved_revision == git!(source, ["rev-parse", "HEAD"])
+    end)
+  end
+
+  test "symphony install uses configured repo and ref when flags are omitted" do
+    with_cycle_home(fn cycle_home ->
+      source = symphony_fixture_repo()
+      previous_repo = System.get_env("CYCLE_SYMPHONY_REPO")
+      previous_ref = System.get_env("CYCLE_SYMPHONY_REF")
+
+      System.put_env("CYCLE_SYMPHONY_REPO", source)
+      System.put_env("CYCLE_SYMPHONY_REF", "main")
+
+      try do
+        output =
+          capture_io(fn ->
+            assert Cycle.CLI.run(["symphony", "install"]) == :ok
+          end)
+
+        install_path = Path.join([cycle_home, "engines", "openai-symphony", "main"])
+        assert output =~ "Cloning Symphony from #{source}"
+        assert output =~ "Symphony installed at: #{install_path}"
+      after
+        restore_env("CYCLE_SYMPHONY_REPO", previous_repo)
+        restore_env("CYCLE_SYMPHONY_REF", previous_ref)
+      end
     end)
   end
 
@@ -283,8 +332,31 @@ defmodule Cycle.CLITest do
     assert output =~ "repo: https://github.com/OWNER/REPO.git"
   end
 
+  test "project opt-in validates and normalizes repo URLs" do
+    output =
+      capture_io(fn ->
+        assert Cycle.CLI.run(["project", "opt-in", "--repo", "https://github.com/OWNER/REPO"]) ==
+                 :ok
+      end)
+
+    assert output =~ "repo: https://github.com/OWNER/REPO.git"
+
+    assert Cycle.CLI.run(["project", "opt-in", "--repo", "not-a-url"]) ==
+             {:error, "cycle.repo: must be an HTTPS GitHub repo URL", 1}
+
+    assert Cycle.CLI.run([
+             "project",
+             "opt-in",
+             "--repo",
+             "https://token@github.com/OWNER/REPO.git"
+           ]) == {:error, "cycle.repo: must be an HTTPS GitHub repo URL", 1}
+  end
+
   test "project discover validates parser options before external calls" do
     assert Cycle.CLI.run(["project", "discover", "--limit", "not-a-number"]) ==
+             {:error, "--limit must be a positive integer", 1}
+
+    assert Cycle.CLI.run(["project", "discover", "--limit", "0"]) ==
              {:error, "--limit must be a positive integer", 1}
   end
 

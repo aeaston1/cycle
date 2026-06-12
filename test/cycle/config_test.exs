@@ -122,6 +122,25 @@ defmodule Cycle.ConfigTest do
     )
   end
 
+  test "engine repository config rejects credentials" do
+    with_temp_config(
+      """
+      engines:
+        managed:
+          openai-symphony:
+            repo: https://token@github.com/OWNER/REPO.git
+      """,
+      fn config_path ->
+        assert {:error, errors} = Config.load(env: %{}, home: @home, config_path: config_path)
+
+        assert %{
+                 path: "engines.managed.openai-symphony.repo",
+                 reason: "must not contain credentials"
+               } in errors
+      end
+    )
+  end
+
   test "legacy config.env can supply LINEAR_API_KEY compatibility" do
     root = temp_root()
     config_home = Path.join(root, "xdg")
@@ -135,6 +154,65 @@ defmodule Cycle.ConfigTest do
     after
       File.rm_rf!(root)
     end
+  end
+
+  test "custom linear api key env is resolved after config merge" do
+    with_temp_config(
+      """
+      linear:
+        api_key_env: CUSTOM_LINEAR_TOKEN
+      """,
+      fn config_path ->
+        env = %{
+          "LINEAR_API_KEY" => "lin_default",
+          "CUSTOM_LINEAR_TOKEN" => "lin_custom"
+        }
+
+        assert {:ok, config} = Config.load(env: env, home: @home, config_path: config_path)
+        assert config.secrets["linear_api_key"] == "lin_custom"
+      end
+    )
+  end
+
+  test "direct linear api key is stored only in secrets and redacted" do
+    with_temp_config(
+      """
+      linear:
+        api_key: lin_file_secret
+      """,
+      fn config_path ->
+        assert {:ok, config} = Config.load(env: %{}, home: @home, config_path: config_path)
+        assert config.secrets["linear_api_key"] == "lin_file_secret"
+        refute Map.has_key?(config.linear, "api_key")
+        refute inspect(Config.redacted(config)) =~ "lin_file_secret"
+      end
+    )
+  end
+
+  test "cycle env file contributes service environment values" do
+    root = temp_root()
+    env_file = Path.join(root, "cycle.env")
+    File.mkdir_p!(root)
+    File.write!(env_file, "CUSTOM_LINEAR_TOKEN=lin_from_env_file\n")
+
+    with_temp_config(
+      """
+      linear:
+        api_key_env: CUSTOM_LINEAR_TOKEN
+      """,
+      fn config_path ->
+        assert {:ok, config} =
+                 Config.load(
+                   env: %{"CYCLE_ENV_FILE" => env_file},
+                   home: @home,
+                   config_path: config_path
+                 )
+
+        assert config.secrets["linear_api_key"] == "lin_from_env_file"
+      end
+    )
+
+    File.rm_rf!(root)
   end
 
   test "redacted display never prints Linear API key in full" do
