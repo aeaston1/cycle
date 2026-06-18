@@ -2,7 +2,7 @@
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  project_slug: "053608165614"
+  project_slug: "PROJECT_SLUG"
   active_states:
     - Todo
     - In Progress
@@ -16,7 +16,7 @@ tracker:
 polling:
   interval_ms: 30000
 workspace:
-  root: /home/symphony_workspaces/cycle
+  root: /tmp/cycle-workspaces
 hooks:
   before_run: |
     for cmd in bash git codex mise; do

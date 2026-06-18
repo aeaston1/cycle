@@ -119,6 +119,9 @@ cycle project opt-in --repo URL
 cycle project discover [--limit N] [--raw]
 cycle start [--dry-run] [--no-dispatch] [--once]
 cycle status [--json]
+cycle policy drift [--json]
+cycle policy propagate --project PROJECT --dry-run
+cycle policy propagate --project PROJECT --apply [--allow-dirty]
 cycle service install [--dry-run] [--yes]
 cycle service status [--json]
 ```
@@ -126,8 +129,6 @@ cycle service status [--json]
 Later CLI surface, after the core is stable:
 
 ```sh
-cycle policy drift [--json]
-cycle policy propagate --project PROJECT --dry-run
 cycle runs list [--json]
 cycle runs show RUN_ID [--json]
 cycle engines list [--json]
@@ -3051,7 +3052,7 @@ Handoff Notes:
 
 ### TODO CYCLE-M9-003: Add optional workflow policy propagation
 
-Status: Todo
+Status: Shipped, keep hardening
 Suggested Linear milestone: M9 - Hardening, Scale, And Future Extensions
 Suggested issue title: Prepare explicit workflow policy propagation
 
@@ -3067,15 +3068,18 @@ rewrite workflows during discovery.
 Decisions:
 
 - Propagation requires explicit command.
-- First implementation supports dry-run patch generation.
-- Applying changes, branch creation, commit, or PR requires explicit flags and
-  confirmation.
+- Dry-run patch generation is supported.
+- Applying changes requires explicit flags and refuses dirty worktrees unless
+  the operator opts into that override.
+- Branch creation, commit, or PR requires separate future operator intent.
 - Propagation edits only relevant workflow settings.
 
 Acceptance Criteria:
 
 - `cycle policy drift` lists drift by project.
 - `cycle policy propagate --project PROJECT --dry-run` prints proposed patch.
+- `cycle policy propagate --project PROJECT --apply [--allow-dirty]` applies
+  the narrow workflow update after explicit operator intent.
 - No files are changed in dry-run.
 - Apply mode refuses dirty worktrees unless explicitly allowed.
 - Generated patch is narrow and public-safe.

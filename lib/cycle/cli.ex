@@ -24,6 +24,7 @@ defmodule Cycle.CLI do
     cycle project discover [--limit N] [--raw]
     cycle policy drift [--json]
     cycle policy propagate --project PROJECT --dry-run
+    cycle policy propagate --project PROJECT --apply [--allow-dirty]
     cycle service install [--dry-run] [--yes]
     cycle service status [--json]
 

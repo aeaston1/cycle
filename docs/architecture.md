@@ -149,17 +149,22 @@ cycle symphony install
 cycle symphony path
 cycle project opt-in --repo <git-repository-url>
 cycle project discover
+cycle policy drift [--json]
+cycle policy propagate --project PROJECT --dry-run
+cycle policy propagate --project PROJECT --apply [--allow-dirty]
 cycle start [--dry-run] [--no-dispatch] [--once]
 cycle status
-cycle service install
+cycle service install [--dry-run] [--yes]
 cycle service status
 ```
 
 The backing behavior is intentionally staged:
 
-- `doctor`, `linear configure`, `symphony install/path`, `project opt-in`, `project discover`, `start`, and `status` have useful scaffold behavior now.
+- `doctor`, `linear configure`, `symphony install/path`, `project opt-in`, `project discover`, `policy drift`, `policy propagate`, `start`, `status`, `service install`, and `service status` have useful behavior now.
 - `start` runs the Cycle discovery and scheduling reconciler in the foreground.
-- `service install` remains a placeholder until Cycle owns daemon installation.
+- `policy drift` reports persisted project workflow drift from the registry.
+- `policy propagate` renders or applies narrow workflow updates only after explicit operator intent.
+- `service install` renders and installs a conservative user service after explicit operator setup.
 - `service status` reports a read-only service snapshot and does not start, stop, enable, disable, reload, or restart services.
 
 The intended command responsibilities:
@@ -171,8 +176,9 @@ The intended command responsibilities:
 - `cycle project opt-in`: print project metadata YAML for Linear descriptions.
 - `cycle project discover`: list opted-in Linear projects and their repos.
 - `cycle start`: run Cycle discovery, workflow validation, drift reporting, scheduling, and optional dispatch decisions in the foreground for operator testing.
-- `cycle status`: show local config, engine state, Linear config, watched project count, active runs, judge queue, and service/API health.
-- future `cycle status` and `cycle doctor`: report policy drift and invalid project workflows against Cycle's global policy.
+- `cycle status`: show local config, engine state, Linear config, watched project count, active runs, judge queue, policy drift, and service/API health.
+- `cycle policy drift`: list persisted workflow drift against Cycle's global policy.
+- `cycle policy propagate`: preview or explicitly apply narrow workflow policy updates.
 - `cycle service install`: install the Cycle daemon only after explicit operator setup.
 - `cycle service status`: report daemon status without starting or stopping services.
 
@@ -204,10 +210,10 @@ The practical migration path is:
 4. Add a Cycle engine registry and version lock file.
 5. Port scheduling so Cycle assigns runs across projects and engines.
 6. Port review judge policy so Cycle owns judgement and routing.
-7. Add global policy validation, drift reporting, and optional workflow propagation.
-8. Replace placeholder service commands with real daemon install/status behavior.
+7. Keep hardening global policy validation, drift reporting, and optional workflow propagation.
+8. Keep hardening daemon install/status behavior.
 9. Add release artifacts and update the Homebrew tap formula.
-10. Add tests around metadata parsing, discovery, scheduling, policy drift, service behavior, and CLI contracts.
+10. Keep adding tests around metadata parsing, discovery, scheduling, policy drift, service behavior, and CLI contracts.
 
 ## Companion Docs
 

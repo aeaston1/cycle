@@ -13,6 +13,8 @@ defmodule Cycle.Security do
   @public_doc_paths ["README.md", "WORKFLOW.md", "docs", "packaging", "skills", ".env.example"]
   @allowed_private_strings ["aeaston1/tap/cycle"]
   @private_repo_pattern ~r/\baeaston1\/(?!tap\/cycle\b)[A-Za-z0-9_.-]+/i
+  @machine_local_path_pattern ~r{/(?:Users|home)/[A-Za-z0-9._-]+/[^\s`'")]+}
+  @numeric_project_slug_pattern ~r/project_slug:\s*["']?\d{6,}["']?/
 
   @type finding :: %{path: String.t(), reason: String.t(), value: String.t()}
 
@@ -97,7 +99,22 @@ defmodule Cycle.Security do
       |> Enum.reject(&(&1 in @allowed_private_strings))
       |> Enum.map(&%{path: path, reason: "contains private repo name", value: &1})
 
-    explicit_findings ++ private_repo_findings
+    machine_local_path_findings =
+      @machine_local_path_pattern
+      |> Regex.scan(body)
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Enum.map(&%{path: path, reason: "contains machine-local path", value: &1})
+
+    numeric_project_slug_findings =
+      @numeric_project_slug_pattern
+      |> Regex.scan(body)
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Enum.map(&%{path: path, reason: "contains numeric project slug", value: &1})
+
+    explicit_findings ++
+      private_repo_findings ++ machine_local_path_findings ++ numeric_project_slug_findings
   end
 
   def fake_secret_values do

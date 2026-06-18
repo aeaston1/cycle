@@ -64,6 +64,28 @@ defmodule Cycle.SecurityTest do
            ] = Cycle.Security.scan_public_docs(root)
   end
 
+  test "public docs scan rejects machine-local paths and numeric project slugs" do
+    root = tmp_dir()
+
+    File.write!(
+      Path.join(root, "WORKFLOW.md"),
+      ~s(project_slug: "053608165614"\nworkspace:\n  root: /home/symphony_workspaces/cycle\n)
+    )
+
+    assert [
+             %{
+               path: "WORKFLOW.md",
+               reason: "contains machine-local path",
+               value: "/home/symphony_workspaces/cycle"
+             },
+             %{
+               path: "WORKFLOW.md",
+               reason: "contains numeric project slug",
+               value: "project_slug: \"053608165614\""
+             }
+           ] = Cycle.Security.scan_public_docs(root)
+  end
+
   test "repository public docs and examples do not contain private repo names" do
     assert [] = Cycle.Security.scan_public_docs(File.cwd!())
   end
