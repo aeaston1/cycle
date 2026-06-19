@@ -166,11 +166,54 @@ defmodule Cycle.RunStoreTest do
                RunStore.schedule_retry(path, run.id, "engine_unhealthy",
                  now: @t1,
                  base_delay_seconds: 30,
-                 max_delay_seconds: 60
+                 max_delay_seconds: 60,
+                 max_attempts: 10
                )
 
       assert retrying.retry["attempt"] == 6
       assert retrying.retry["next_retry_at"] == "2026-05-22T12:02:00Z"
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  test "schedule_retry fails exhausted retries after max attempts" do
+    root = temp_root()
+    path = Path.join(root, "runs.yaml")
+
+    try do
+      assert {:ok, run} =
+               RunStore.create_queued(
+                 path,
+                 run_attrs(%{"id" => "run-1", "retry" => %{"attempt" => 3, "max_attempts" => 3}}),
+                 now: @t0
+               )
+
+      assert {:ok, _running} = RunStore.transition(path, run.id, "running", %{}, now: @t1)
+
+      assert {:ok, _retrying} =
+               RunStore.transition(
+                 path,
+                 run.id,
+                 "retrying",
+                 %{"retry" => %{"attempt" => 3, "max_attempts" => 3, "next_retry_at" => @t2}},
+                 now: @t1
+               )
+
+      assert {:ok, failed} =
+               RunStore.schedule_retry(path, run.id, "engine_unhealthy",
+                 now: @t2,
+                 base_delay_seconds: 30,
+                 max_delay_seconds: 60
+               )
+
+      assert failed.state == "failed"
+      assert failed.retry["attempt"] == 4
+      assert failed.retry["max_attempts"] == 3
+      refute Map.has_key?(failed.retry, "next_retry_at")
+      assert failed.last_event["type"] == "retry_exhausted"
+      assert failed.last_event["reason_code"] == "engine_unhealthy"
+      assert failed.timestamps["finished_at"] == @t2
     after
       File.rm_rf!(root)
     end

@@ -384,7 +384,7 @@ defmodule Cycle.Reconciler do
   defp reconcile_retry(config, run, run_store, projects, engine_registry, client, now, opts) do
     with {:ok, project} <- retry_project(run, projects),
          {:ok, issue} <- retry_issue(run, project, client) do
-      retry_decision(config, run, issue, run_store, engine_registry, now, opts)
+      retry_decision(config, run, issue, project, run_store, engine_registry, now, opts)
     else
       {:suppress, reason, message} -> suppress_retry(config, run, reason, message, now)
       {:reschedule, reason, message} -> reschedule_retry(config, run, reason, message, now, opts)
@@ -426,12 +426,12 @@ defmodule Cycle.Reconciler do
     end
   end
 
-  defp retry_decision(config, run, issue, run_store, engine_registry, now, opts) do
+  defp retry_decision(config, run, issue, project, run_store, engine_registry, now, opts) do
     runs = Enum.reject(run_store.runs, &(&1.id == run.id))
 
     decision =
       Scheduler.decide([issue],
-        active_states: get_in(config.linear, ["active_states"]) || [],
+        active_states: scheduler_active_states(config, project),
         terminal_states: get_in(config.linear, ["terminal_states"]) || [],
         default_engine_id: get_in(config.engines, ["default"]),
         engine_registry: engine_registry,

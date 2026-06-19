@@ -110,33 +110,53 @@ defmodule Cycle.RunStore do
          {:ok, run, _before, _after_runs} <- take_run(registry.runs, run_id) do
       attempt = retry_attempt(run) + 1
       max_attempts = Keyword.get(opts, :max_attempts, retry_max_attempts(run))
-      delay = retry_delay(attempt, opts)
       now = timestamp(opts)
-      next_retry_at = shift_timestamp(now, delay)
 
-      transition(
-        path,
-        run_id,
-        "retrying",
-        %{
-          "retry" =>
-            run.retry
-            |> Kernel.||(%{})
-            |> Map.merge(%{
-              "attempt" => attempt,
-              "max_attempts" => max_attempts,
-              "next_retry_at" => next_retry_at,
-              "reason" => reason
-            }),
-          "last_event" => %{
-            "type" => "retry_scheduled",
-            "reason_code" => reason,
-            "message" => Keyword.get(opts, :message) || "retry scheduled",
-            "next_retry_at" => next_retry_at
-          }
-        },
-        now: now
-      )
+      retry =
+        run.retry
+        |> Kernel.||(%{})
+        |> Map.delete("next_retry_at")
+        |> Map.merge(%{
+          "attempt" => attempt,
+          "max_attempts" => max_attempts,
+          "reason" => reason
+        })
+
+      if attempt > max_attempts do
+        transition(
+          path,
+          run_id,
+          "failed",
+          %{
+            "retry" => retry,
+            "last_event" => %{
+              "type" => "retry_exhausted",
+              "reason_code" => reason,
+              "message" => Keyword.get(opts, :message) || "retry attempts exhausted"
+            }
+          },
+          now: now
+        )
+      else
+        delay = retry_delay(attempt, opts)
+        next_retry_at = shift_timestamp(now, delay)
+
+        transition(
+          path,
+          run_id,
+          "retrying",
+          %{
+            "retry" => Map.put(retry, "next_retry_at", next_retry_at),
+            "last_event" => %{
+              "type" => "retry_scheduled",
+              "reason_code" => reason,
+              "message" => Keyword.get(opts, :message) || "retry scheduled",
+              "next_retry_at" => next_retry_at
+            }
+          },
+          now: now
+        )
+      end
     end
   end
 

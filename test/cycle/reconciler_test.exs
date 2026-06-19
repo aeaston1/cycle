@@ -219,6 +219,57 @@ defmodule Cycle.ReconcilerTest do
     end)
   end
 
+  test "due retry uses project workflow active states" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_workflow!(checkout_path, active_states: ["Doing"])
+
+      stub_linear(name,
+        refresh_issue: linear_issue(%{"state" => %{"name" => "Doing", "type" => "started"}})
+      )
+
+      seed_retrying_run!(cycle_home)
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home,
+          workflow: %{"linear" => %{"active_states" => ["Todo"]}}
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn _client, _project_id, _states, _opts -> {:ok, []} end
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 no_dispatch: true,
+                 local_checkout_paths: [checkout_path],
+                 issue_lister: issue_lister,
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 retry_base_delay_seconds: 30,
+                 retry_max_delay_seconds: 60,
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%RunStore.Run{state: "retrying", retry: retry, last_event: event}] =
+               result.recorded
+
+      assert retry["attempt"] == 2
+      assert event["type"] == "retry_scheduled"
+      assert event["reason_code"] == "engine_unhealthy"
+    end)
+  end
+
   test "invalid workflow suppresses a due retry as stale" do
     Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
       name = unique_stub()
@@ -419,8 +470,9 @@ defmodule Cycle.ReconcilerTest do
              RunStore.transition(path, run.id, "retrying", %{}, now: "2026-05-22T11:52:00Z")
   end
 
-  defp write_workflow!(root) do
+  defp write_workflow!(root, opts \\ []) do
     File.mkdir_p!(root)
+    active_states = Keyword.get(opts, :active_states, ["Todo", "In Progress"])
 
     File.write!(Path.join(root, "WORKFLOW.md"), """
     ---
@@ -428,8 +480,7 @@ defmodule Cycle.ReconcilerTest do
       max_concurrent_agents: 2
     tracker:
       active_states:
-        - Todo
-        - In Progress
+    #{Enum.map_join(active_states, "\n", &"    - #{&1}")}
       terminal_states:
         - Done
     ---
