@@ -163,6 +163,27 @@ defmodule Cycle.WorkflowPolicyTest do
     assert reason =~ "invalid YAML"
   end
 
+  test "front matter parser preserves delimiter-looking lines inside YAML scalars" do
+    assert {:ok, policy} =
+             WorkflowPolicy.parse("""
+             ---
+             codex:
+               instructions: |
+                 keep this line
+                 ---
+                 still inside the scalar
+             engine:
+               id: openai-symphony@main
+             ---
+             Prompt body.
+             """)
+
+    assert policy.engine["id"] == "openai-symphony@main"
+
+    assert policy.codex["instructions"] ==
+             "keep this line\n---\nstill inside the scalar\n"
+  end
+
   test "invalid field types return path-level validation errors" do
     assert {:error, errors} =
              WorkflowPolicy.parse("""

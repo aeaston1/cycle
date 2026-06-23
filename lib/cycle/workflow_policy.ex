@@ -49,8 +49,12 @@ defmodule Cycle.WorkflowPolicy do
     lines = String.split(content, "\n")
 
     case lines do
-      ["---" | rest] ->
-        closing_front_matter(rest, [])
+      [line | rest] ->
+        if front_matter_delimiter?(line) do
+          closing_front_matter(rest, [])
+        else
+          {:error, "missing YAML front matter"}
+        end
 
       _ ->
         {:error, "missing YAML front matter"}
@@ -60,11 +64,15 @@ defmodule Cycle.WorkflowPolicy do
   defp closing_front_matter([], _yaml), do: {:error, "missing YAML front matter"}
 
   defp closing_front_matter([line | rest], yaml) do
-    if String.trim(line) == "---" do
+    if front_matter_delimiter?(line) do
       {:ok, yaml |> Enum.reverse() |> Enum.join("\n")}
     else
       closing_front_matter(rest, [line | yaml])
     end
+  end
+
+  defp front_matter_delimiter?(line) when is_binary(line) do
+    String.starts_with?(line, "---") and String.trim_trailing(line) == "---"
   end
 
   defp parse_yaml(yaml) do
