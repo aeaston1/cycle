@@ -7,6 +7,8 @@ defmodule Cycle.ReviewJudgeRegistry do
   alias Cycle.Registry.Store
 
   @records_key "records"
+  @external_review_key "external_review"
+  @external_review_atom :external_review
   @known_record_keys [
     "id",
     "issue",
@@ -19,7 +21,7 @@ defmodule Cycle.ReviewJudgeRegistry do
     "details",
     "timestamps"
   ]
-  @statuses ["active", "written", "skipped", "failed"]
+  @statuses ["active", "completed", "written", "skipped", "failed"]
 
   defstruct schema_version: Schema.schema_version(), records: [], extra: %{}
 
@@ -39,6 +41,40 @@ defmodule Cycle.ReviewJudgeRegistry do
   end
 
   def path(state_dir), do: Path.join(state_dir, "review_judge.yaml")
+
+  @doc false
+  def sanitize_details(details) when is_map(details) do
+    raw_external_review = external_review_value(details)
+    details = Map.drop(details, [@external_review_key, @external_review_atom])
+
+    case external_review_summary(raw_external_review) do
+      nil -> details
+      summary -> Map.put(details, @external_review_key, summary)
+    end
+  end
+
+  def sanitize_details(details), do: details
+
+  @doc false
+  def external_review_summary(raw) when is_map(raw) do
+    severity_breakdown = severity_breakdown(raw)
+
+    summary =
+      %{}
+      |> put_present("provider", summary_string(raw, ["provider", :provider], 120))
+      |> put_present("status", summary_string(raw, ["status", :status], 120))
+      |> put_present("reason_code", summary_string(raw, ["reason_code", :reason_code], 160))
+      |> put_present("findings_count", findings_count(raw, severity_breakdown))
+      |> put_present("severity_breakdown", severity_breakdown)
+      |> put_present("artifact_path", summary_string(raw, ["artifact_path", :artifact_path], 300))
+      |> put_present("log_path", summary_string(raw, ["log_path", :log_path], 300))
+      |> put_present("fingerprint", summary_string(raw, ["fingerprint", :fingerprint], 120))
+      |> Cycle.Log.redact()
+
+    if map_size(summary) == 0, do: nil, else: summary
+  end
+
+  def external_review_summary(_raw), do: nil
 
   def load(path) do
     with {:ok, raw} <- Store.read(path, empty_map()) do
@@ -87,7 +123,7 @@ defmodule Cycle.ReviewJudgeRegistry do
       reason_code: Map.get(attrs, "reason_code") || Map.get(attrs, :reason_code),
       message: Map.get(attrs, "message") || Map.get(attrs, :message),
       hard_stops: Map.get(attrs, "hard_stops") || Map.get(attrs, :hard_stops) || [],
-      details: Map.get(attrs, "details") || Map.get(attrs, :details) || %{},
+      details: sanitize_details(Map.get(attrs, "details") || Map.get(attrs, :details) || %{}),
       timestamps:
         Map.get(attrs, "timestamps") || Map.get(attrs, :timestamps) || %{"updated_at" => now}
     }
@@ -140,7 +176,7 @@ defmodule Cycle.ReviewJudgeRegistry do
       reason_code: map["reason_code"],
       message: map["message"],
       hard_stops: Map.get(map, "hard_stops", []),
-      details: Map.get(map, "details", %{}),
+      details: sanitize_details(Map.get(map, "details", %{})),
       timestamps: Map.get(map, "timestamps", %{}),
       extra: Schema.preserve_extra(map, @known_record_keys)
     }
@@ -156,7 +192,7 @@ defmodule Cycle.ReviewJudgeRegistry do
       "reason_code" => record.reason_code,
       "message" => record.message,
       "hard_stops" => record.hard_stops || [],
-      "details" => record.details || %{},
+      "details" => sanitize_details(record.details || %{}),
       "timestamps" => record.timestamps || %{}
     }
     |> Schema.put_extra(record.extra)
@@ -169,4 +205,119 @@ defmodule Cycle.ReviewJudgeRegistry do
       nil -> DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     end
   end
+
+  defp external_review_value(details) when is_map(details) do
+    Map.get(details, @external_review_key) || Map.get(details, @external_review_atom)
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, _key, value) when is_map(value) and map_size(value) == 0, do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  defp summary_string(map, keys, max) do
+    case fetch_any(map, keys) do
+      nil ->
+        nil
+
+      value when is_binary(value) or is_atom(value) or is_number(value) ->
+        value
+        |> to_string()
+        |> String.replace(~r/\s+/, " ")
+        |> String.trim()
+        |> empty_to_nil()
+        |> slice(max)
+
+      _value ->
+        nil
+    end
+  end
+
+  defp findings_count(raw, severity_breakdown) do
+    cond do
+      count = integer_value(fetch_any(raw, ["findings_count", :findings_count])) ->
+        count
+
+      count = integer_value(fetch_any(raw, ["finding_count", :finding_count])) ->
+        count
+
+      findings = findings(raw) ->
+        length(findings)
+
+      is_map(severity_breakdown) and map_size(severity_breakdown) > 0 ->
+        severity_breakdown |> Map.values() |> Enum.sum()
+
+      true ->
+        nil
+    end
+  end
+
+  defp severity_breakdown(raw) do
+    cond do
+      counts = fetch_any(raw, ["severity_breakdown", :severity_breakdown]) ->
+        normalize_severity_counts(counts)
+
+      counts = fetch_any(raw, ["severity_counts", :severity_counts]) ->
+        normalize_severity_counts(counts)
+
+      findings = findings(raw) ->
+        findings
+        |> Enum.map(&summary_string(&1, ["severity", :severity], 80))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.frequencies()
+
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_severity_counts(counts) when is_map(counts) do
+    counts
+    |> Enum.reduce(%{}, fn {severity, count}, acc ->
+      with severity when is_binary(severity) <- severity_key(severity),
+           count when is_integer(count) <- integer_value(count) do
+        Map.put(acc, severity, count)
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  defp normalize_severity_counts(_counts), do: nil
+
+  defp findings(raw) do
+    case fetch_any(raw, ["findings", :findings]) do
+      findings when is_list(findings) -> Enum.filter(findings, &is_map/1)
+      _ -> nil
+    end
+  end
+
+  defp fetch_any(map, keys), do: Enum.find_value(keys, &Map.get(map, &1))
+
+  defp integer_value(value) when is_integer(value) and value >= 0, do: value
+
+  defp integer_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {count, ""} when count >= 0 -> count
+      _ -> nil
+    end
+  end
+
+  defp integer_value(_value), do: nil
+
+  defp severity_key(value) when is_atom(value), do: value |> Atom.to_string() |> severity_key()
+
+  defp severity_key(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> empty_to_nil()
+  end
+
+  defp severity_key(_value), do: nil
+
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
+
+  defp slice(nil, _max), do: nil
+  defp slice(value, max), do: String.slice(value, 0, max)
 end

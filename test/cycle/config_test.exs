@@ -18,6 +18,32 @@ defmodule Cycle.ConfigTest do
              "https://github.com/openai/symphony.git"
   end
 
+  test "review automation and future fix provider defaults are disabled" do
+    assert {:ok, config} = Config.load(env: %{}, home: @home)
+    external = get_in(config.review_judge, ["external_review"])
+
+    assert config.review_judge["enabled"] == false
+    assert config.review_judge["source_state"] == "Human Review"
+    assert config.review_judge["review_state"] == "Human Review"
+    assert config.review_judge["proceed_state"] == "Merging"
+    assert "Rework" in config.linear["active_states"]
+
+    assert external["enabled"] == false
+    assert external["provider"] == "clawpatch"
+    assert external["execution"] == "local_workspace"
+    assert external["trigger"] == "after_tentative_proceed"
+    assert external["failure_decision"] == "require_human_review"
+    assert external["command"] == "clawpatch"
+    assert external["args"] == ["review", "--json", "--since", "origin/main"]
+
+    assert external["artifact_dir"] ==
+             "/tmp/cycle-config-test-home/.local/share/cycle/review-jobs"
+
+    assert external["route_findings_to_rework"] == true
+    assert external["rework_state"] == "Rework"
+    assert get_in(external, ["fix", "enabled"]) == false
+  end
+
   test "valid config YAML loads into typed structs and maps" do
     with_temp_config(
       """
@@ -39,6 +65,60 @@ defmodule Cycle.ConfigTest do
         assert config.polling["interval_ms"] == 1000
         assert config.projects["registry_path"] == "/tmp/cycle-state/custom-projects.yaml"
         assert get_in(config.engines, ["managed", "openai-symphony", "default_ref"]) == "release"
+      end
+    )
+  end
+
+  test "external review environment overrides implemented local provider settings" do
+    env = %{
+      "CYCLE_HOME" => "/tmp/cycle-state",
+      "CYCLE_REVIEW_EXTERNAL_ENABLED" => "true",
+      "CYCLE_CLAWPATCH_COMMAND" => "clawpatch-test",
+      "CYCLE_CLAWPATCH_ARGS" => "review --json --dry-run",
+      "CYCLE_REVIEW_EXTERNAL_ARTIFACT_DIR" => "/tmp/cycle-state/external-review",
+      "CYCLE_CLAWPATCH_CONFIG_PATH" => "/tmp/cycle-state/clawpatch.json",
+      "CYCLE_CRABBOX_CONFIG_PATH" => "/tmp/cycle-state/crabbox.toml"
+    }
+
+    assert {:ok, config} = Config.load(env: env, home: @home)
+    external = get_in(config.review_judge, ["external_review"])
+
+    assert external["enabled"] == true
+    assert external["command"] == "clawpatch-test"
+    assert external["args"] == ["review", "--json", "--dry-run"]
+    assert external["artifact_dir"] == "/tmp/cycle-state/external-review"
+    assert external["clawpatch_config_path"] == "/tmp/cycle-state/clawpatch.json"
+    assert external["crabbox_config_path"] == "/tmp/cycle-state/crabbox.toml"
+  end
+
+  test "external review validation rejects unsupported providers and enabled fix" do
+    with_temp_config(
+      """
+      review_judge:
+        external_review:
+          provider: other-reviewer
+          artifact_dir: ${CYCLE_HOME}/review-jobs
+          fix:
+            enabled: true
+      """,
+      fn config_path ->
+        assert {:error, errors} =
+                 Config.load(
+                   env: %{"CYCLE_HOME" => "/tmp/cycle-state"},
+                   home: @home,
+                   config_path: config_path
+                 )
+
+        assert %{
+                 path: "review_judge.external_review.provider",
+                 reason: "must be one of: clawpatch"
+               } in errors
+
+        assert %{
+                 path: "review_judge.external_review.fix.enabled",
+                 reason:
+                   "clawpatch fix execution is a Rework-lane follow-up and is not implemented in this release"
+               } in errors
       end
     )
   end

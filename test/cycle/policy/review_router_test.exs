@@ -142,6 +142,38 @@ defmodule Cycle.Policy.ReviewRouterTest do
     assert_received {:move, "issue-id", "Merging"}
   end
 
+  test "decision comment redacts token-like summary text before posting" do
+    parent = self()
+
+    result =
+      ReviewRouter.route(
+        issue(),
+        %Decision{
+          decision: "require_human_review",
+          confidence: "high",
+          reason: "External review failed with api_key=lin_super_secret",
+          evidence: [
+            "Authorization: Bearer abc1234567890abc1234567890abc1234567890",
+            "Fetched https://token@github.com/OWNER/REPO.git"
+          ]
+        },
+        opts(
+          create_comment: fn _client, issue_id, body ->
+            send(parent, {:comment, issue_id, body})
+            {:ok, comment()}
+          end
+        )
+      )
+
+    assert result.status == :written
+    assert_received {:comment, "issue-id", body}
+    assert body =~ "[REDACTED]"
+    refute body =~ "lin_super_secret"
+    refute body =~ "abc1234567890abc1234567890abc1234567890"
+    refute body =~ "https://token@github.com/OWNER/REPO.git"
+    assert body =~ "https://[REDACTED]@github.com/OWNER/REPO.git"
+  end
+
   test "move failure after comment is visible in result" do
     parent = self()
 
@@ -165,6 +197,58 @@ defmodule Cycle.Policy.ReviewRouterTest do
     assert result.message =~ "update_issue_state"
     assert result.details["stage"] == "update_issue_state"
     assert_received {:comment, "issue-id"}
+  end
+
+  test "external review details are summarized in comments and registry records" do
+    parent = self()
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "cycle-review-router-external-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    on_exit(fn -> File.rm(path) end)
+
+    result =
+      ReviewRouter.route(
+        issue(),
+        external_review_decision(),
+        opts(
+          review_judge_registry_path: path,
+          create_comment: fn _client, issue_id, body ->
+            send(parent, {:comment, issue_id, body})
+            {:ok, comment()}
+          end
+        )
+      )
+
+    expected_summary = external_review_summary()
+
+    assert result.status == :written
+
+    assert Map.take(result.details["external_review"], Map.keys(expected_summary)) ==
+             expected_summary
+
+    assert_received {:comment, "issue-id", body}
+    assert body =~ "External review:"
+    assert body =~ "Provider: clawpatch"
+    assert body =~ "Status: completed"
+    assert body =~ "Reason code: blocking_findings"
+    assert body =~ "Findings: 2"
+    assert body =~ "Severity: high=1, medium=1"
+    assert body =~ "Artifact: /tmp/cycle/reviews/CYC-1.json"
+    assert body =~ "Log: /tmp/cycle/reviews/CYC-1.log"
+    refute_raw_external_review_payload(body)
+
+    assert {:ok, registry} = Cycle.ReviewJudgeRegistry.load(path)
+    assert [record] = registry.records
+
+    assert Map.take(record.details["external_review"], Map.keys(expected_summary)) ==
+             expected_summary
+
+    persisted = File.read!(path)
+    refute_raw_external_review_payload(persisted)
   end
 
   test "records route result when review judge registry path is provided" do
@@ -278,6 +362,59 @@ defmodule Cycle.Policy.ReviewRouterTest do
         }
       ]
     }
+  end
+
+  defp external_review_decision do
+    %Decision{
+      decision: "require_human_review",
+      confidence: "high",
+      reason: "External reviewer found blocking issues.",
+      provenance: %{"external_review" => external_review_payload()}
+    }
+  end
+
+  defp external_review_payload do
+    %{
+      "provider" => "clawpatch",
+      "status" => "completed",
+      "reason_code" => "blocking_findings",
+      "findings" => [
+        %{"severity" => "high", "body" => "RAW_FINDING_BODY_SHOULD_NOT_LEAK"},
+        %{"severity" => "medium", "body" => "RAW_SECOND_FINDING_SHOULD_NOT_LEAK"}
+      ],
+      "artifact_path" => "/tmp/cycle/reviews/CYC-1.json",
+      "log_path" => "/tmp/cycle/reviews/CYC-1.log",
+      "stdout" => "RAW_STDOUT_SHOULD_NOT_LEAK",
+      "stderr" => "RAW_STDERR_SHOULD_NOT_LEAK",
+      "patch" => "RAW_PATCH_SHOULD_NOT_LEAK",
+      "full_diff" => "RAW_DIFF_SHOULD_NOT_LEAK",
+      "prompt" => "RAW_PROMPT_SHOULD_NOT_LEAK",
+      "provider_config" => %{"endpoint" => "https://review.example.invalid"}
+    }
+  end
+
+  defp external_review_summary do
+    %{
+      "provider" => "clawpatch",
+      "status" => "completed",
+      "reason_code" => "blocking_findings",
+      "findings_count" => 2,
+      "severity_breakdown" => %{"high" => 1, "medium" => 1},
+      "artifact_path" => "/tmp/cycle/reviews/CYC-1.json",
+      "log_path" => "/tmp/cycle/reviews/CYC-1.log"
+    }
+  end
+
+  defp refute_raw_external_review_payload(body) do
+    refute body =~ "RAW_FINDING_BODY_SHOULD_NOT_LEAK"
+    refute body =~ "RAW_SECOND_FINDING_SHOULD_NOT_LEAK"
+    refute body =~ "RAW_STDOUT_SHOULD_NOT_LEAK"
+    refute body =~ "RAW_STDERR_SHOULD_NOT_LEAK"
+    refute body =~ "RAW_PATCH_SHOULD_NOT_LEAK"
+    refute body =~ "RAW_DIFF_SHOULD_NOT_LEAK"
+    refute body =~ "RAW_PROMPT_SHOULD_NOT_LEAK"
+    refute body =~ "provider_config"
+    refute body =~ "review.example.invalid"
   end
 
   defp comment do

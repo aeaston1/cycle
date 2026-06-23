@@ -80,6 +80,26 @@ defmodule Cycle.Policy.EvidenceHashTest do
     refute base == EvidenceHash.compute(@evidence, workflow_policy_version: "workflow-v2")
   end
 
+  test "external review fingerprints are part of the evidence hash input" do
+    first =
+      Map.put(@evidence, "external_review", %{
+        "provider" => "clawpatch",
+        "fingerprint" =>
+          "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "workspace_path" => "/tmp/cycle/workspaces/AEA-170"
+      })
+
+    second =
+      put_in(
+        first,
+        ["external_review", "fingerprint"],
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      )
+
+    refute EvidenceHash.compute(first, judge_profile: "standard") ==
+             EvidenceHash.compute(second, judge_profile: "standard")
+  end
+
   test "duplicate comment detection matches existing judge hash marker" do
     hash = EvidenceHash.compute(@evidence, judge_profile: "standard")
 

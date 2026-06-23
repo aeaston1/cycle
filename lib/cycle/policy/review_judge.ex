@@ -137,6 +137,7 @@ defmodule Cycle.Policy.ReviewJudge do
     |> hard_label_stops(evidence, policy)
     |> required_missing_stops(evidence)
     |> git_unavailable_stop(evidence)
+    |> workspace_mismatch_stop(evidence)
     |> validation_evidence_stop(evidence)
     |> sensitive_surface_stops(evidence, policy)
     |> Enum.reverse()
@@ -224,6 +225,31 @@ defmodule Cycle.Policy.ReviewJudge do
   end
 
   defp git_unavailable_stop(stops, _evidence), do: stops
+
+  defp workspace_mismatch_stop(
+         stops,
+         %Evidence{
+           git: %{"workspace_path" => git_workspace_path},
+           run: %{"workspace_path" => run_workspace_path}
+         }
+       )
+       when is_binary(git_workspace_path) and is_binary(run_workspace_path) do
+    if same_path?(git_workspace_path, run_workspace_path) do
+      stops
+    else
+      [
+        hard_stop(:workspace_mismatch, "git evidence came from a different workspace", %{
+          "git_workspace_path" => git_workspace_path,
+          "run_workspace_path" => run_workspace_path
+        })
+        | stops
+      ]
+    end
+  end
+
+  defp workspace_mismatch_stop(stops, _evidence), do: stops
+
+  defp same_path?(left, right), do: Path.expand(left) == Path.expand(right)
 
   defp validation_evidence_stop(stops, evidence) do
     if code_changes?(evidence) and not validation_evidence?(evidence) do

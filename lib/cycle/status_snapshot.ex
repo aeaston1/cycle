@@ -240,6 +240,7 @@ defmodule Cycle.StatusSnapshot do
       "duplicate_skips" => count_reason(records, "duplicate_evidence_hash"),
       "route_failures" => count_status(records, "failed"),
       "hard_review_reasons" => hard_review_reasons(records),
+      "external_review" => external_review_summary(records),
       "policy_drift" => %{"count" => drift["count"], "top" => drift["top"]},
       "records" => Enum.map(records, &review_judge_record/1)
     }
@@ -269,6 +270,36 @@ defmodule Cycle.StatusSnapshot do
   defp count_reason(records, reason), do: Enum.count(records, &(&1.reason_code == reason))
   defp count_status(records, status), do: Enum.count(records, &(&1.status == status))
 
+  defp external_review_summary(records) do
+    records = Enum.filter(records, &external_review_record?/1)
+
+    %{
+      "active" => Enum.count(records, &(&1.status == "active")),
+      "completed" => Enum.count(records, &(&1.status == "completed")),
+      "failures" => Enum.count(records, &external_review_failed?/1),
+      "findings" => Enum.count(records, &external_review_findings?/1)
+    }
+  end
+
+  defp external_review_record?(record) do
+    is_map(get_in(record.details || %{}, ["external_review"])) or
+      (is_binary(record.reason_code) and
+         String.starts_with?(record.reason_code, "external_review"))
+  end
+
+  defp external_review_failed?(record) do
+    record.status == "failed" or
+      get_in(record.details || %{}, ["external_review", "status"]) == "failed"
+  end
+
+  defp external_review_findings?(record) do
+    external = get_in(record.details || %{}, ["external_review"]) || %{}
+
+    external["status"] == "findings" or
+      external["reason_code"] == "external_review_findings" or
+      external["reason_code"] == "blocking_findings"
+  end
+
   defp review_judge_record(record) do
     %{
       "id" => record.id,
@@ -279,7 +310,8 @@ defmodule Cycle.StatusSnapshot do
       "reason_code" => record.reason_code,
       "message" => record.message,
       "hard_stops" => record.hard_stops || [],
-      "details" => Cycle.Log.redact(record.details || %{}),
+      "details" =>
+        (record.details || %{}) |> ReviewJudgeRegistry.sanitize_details() |> Cycle.Log.redact(),
       "timestamps" => record.timestamps || %{}
     }
   end

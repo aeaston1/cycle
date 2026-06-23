@@ -11,9 +11,11 @@ defmodule Cycle.Reconciler do
   alias Cycle.Linear.Client
   alias Cycle.ProjectDiscovery
   alias Cycle.Policy.EvidenceHash
+  alias Cycle.Policy.ExternalReviewGate
   alias Cycle.Policy.ReviewEvidence
   alias Cycle.Policy.ReviewJudge
   alias Cycle.Policy.ReviewRouter
+  alias Cycle.ReviewJudgeRegistry
   alias Cycle.RunStore
   alias Cycle.Scheduler
 
@@ -262,7 +264,6 @@ defmodule Cycle.Reconciler do
     evidence =
       evidence_builder.(issue, client,
         run_store_path: run_store_path(config),
-        workspace_path: workspace_path(config, issue),
         workflow_policy_version: get_in(issue.project, ["workflow", "policy_hash"]),
         global_policy_version: global_policy_version(config, global_policy),
         code_changing?: true
@@ -271,22 +272,41 @@ defmodule Cycle.Reconciler do
     decision =
       ReviewJudge.decide(evidence, policy, runner: Keyword.get(opts, :review_judge_runner))
 
-    evidence_hash =
+    base_evidence_hash =
       EvidenceHash.compute(evidence.stable_hash_input,
         judge_profile: policy["policy"],
         workflow_policy_version: evidence.workflow_policy_version,
         global_policy_version: evidence.global_policy_version
       )
 
+    with {:ready, decision, evidence_hash} <-
+           external_review_decision(
+             config,
+             issue,
+             evidence,
+             decision,
+             base_evidence_hash,
+             policy,
+             opts
+           ) do
+      route_review_decision(config, issue, client, decision, evidence_hash, policy, opts)
+    else
+      {:pending, %ReviewRouter.Result{} = result} ->
+        log_review_result(config, issue, result)
+        {:ok, result}
+    end
+  end
+
+  defp route_review_decision(config, issue, client, decision, evidence_hash, policy, opts) do
     router = Keyword.get(opts, :review_router, &ReviewRouter.route/3)
 
     case router.(issue, decision,
            client: client,
            evidence_hash: evidence_hash,
            source_state: policy["source_state"],
-           review_state: policy["review_state"],
+           review_state: review_state_for_decision(policy, decision),
            proceed_state: policy["proceed_state"],
-           review_judge_registry_path: Cycle.ReviewJudgeRegistry.path(config.paths.state_dir),
+           review_judge_registry_path: ReviewJudgeRegistry.path(config.paths.state_dir),
            refresh_issue: Keyword.get(opts, :review_refresh_issue, &Client.refresh_issue/2),
            list_comments: Keyword.get(opts, :review_list_comments, &Client.list_comments/2),
            create_comment: Keyword.get(opts, :review_create_comment, &Client.create_comment/3),
@@ -300,6 +320,306 @@ defmodule Cycle.Reconciler do
       other ->
         {:error, {:review_router, :unexpected_result, other}}
     end
+  end
+
+  defp external_review_decision(
+         config,
+         issue,
+         evidence,
+         %ReviewJudge.Decision{decision: "proceed_to_merging"} = decision,
+         base_evidence_hash,
+         policy,
+         opts
+       ) do
+    if ExternalReviewGate.enabled?(policy) do
+      registry_path = ReviewJudgeRegistry.path(config.paths.state_dir)
+      job_id = external_review_job_id(issue, base_evidence_hash)
+
+      case external_review_record(registry_path, job_id) do
+        {:completed, external_review} ->
+          final_decision = apply_external_review(decision, external_review)
+          final_hash = external_review_hash(evidence, external_review, policy)
+          {:ready, final_decision, final_hash}
+
+        :active ->
+          {:pending,
+           review_pending_result(
+             issue,
+             "external_review_active",
+             "external review is already running"
+           )}
+
+        :missing ->
+          with {:ok, result} <-
+                 start_external_review_job(
+                   config,
+                   issue,
+                   evidence,
+                   policy,
+                   base_evidence_hash,
+                   job_id,
+                   opts
+                 ) do
+            {:pending, result}
+          else
+            {:error, external_review} ->
+              final_decision = apply_external_review(decision, external_review)
+              final_hash = external_review_hash(evidence, external_review, policy)
+              {:ready, final_decision, final_hash}
+          end
+      end
+    else
+      {:ready, decision, base_evidence_hash}
+    end
+  end
+
+  defp external_review_decision(
+         _config,
+         _issue,
+         _evidence,
+         decision,
+         evidence_hash,
+         _policy,
+         _opts
+       ),
+       do: {:ready, decision, evidence_hash}
+
+  defp external_review_record(path, job_id) do
+    case ReviewJudgeRegistry.load(path) do
+      {:ok, registry} ->
+        registry.records
+        |> Enum.find(&(&1.id == job_id))
+        |> case do
+          nil ->
+            :missing
+
+          %{status: "completed", details: details} ->
+            {:completed, details["external_review"] || %{}}
+
+          %{status: "failed", details: details} ->
+            {:completed, details["external_review"] || %{}}
+
+          _record ->
+            :active
+        end
+
+      {:error, _reason} ->
+        :missing
+    end
+  end
+
+  defp start_external_review_job(
+         config,
+         issue,
+         evidence,
+         policy,
+         base_evidence_hash,
+         job_id,
+         opts
+       ) do
+    registry_path = ReviewJudgeRegistry.path(config.paths.state_dir)
+    external_config = ExternalReviewGate.config(policy)
+
+    attrs =
+      external_review_record_attrs(
+        job_id,
+        issue,
+        "active",
+        nil,
+        "external_review_started",
+        "external review started",
+        %{
+          "evidence_hash" => base_evidence_hash,
+          "external_review" => %{
+            "provider" => external_config["provider"],
+            "execution" => external_config["execution"],
+            "status" => "active",
+            "workspace_path" => get_in(evidence.git || %{}, ["workspace_path"])
+          }
+        }
+      )
+
+    with {:ok, _record} <-
+           ReviewJudgeRegistry.record(registry_path, attrs, now: Keyword.get(opts, :now)),
+         :ok <- launch_external_review_task(registry_path, job_id, issue, evidence, policy, opts) do
+      {:ok, review_pending_result(issue, "external_review_started", "external review started")}
+    else
+      {:error, reason} ->
+        external_review =
+          %ExternalReviewGate.Result{
+            provider: external_config["provider"],
+            execution: external_config["execution"],
+            status: "failed",
+            reason_code: "external_review_failed",
+            message: "external review could not be started",
+            workspace_path: get_in(evidence.git || %{}, ["workspace_path"]),
+            details: %{"reason" => inspect(reason)}
+          }
+          |> ExternalReviewGate.summary()
+
+        {:error, external_review}
+    end
+  end
+
+  defp launch_external_review_task(registry_path, job_id, issue, evidence, policy, opts) do
+    starter = Keyword.get(opts, :external_review_starter, &default_external_review_starter/6)
+    starter.(registry_path, job_id, issue, evidence, policy, opts)
+  end
+
+  defp default_external_review_starter(registry_path, job_id, issue, evidence, policy, opts) do
+    task = fn ->
+      result =
+        ExternalReviewGate.run(evidence, policy,
+          command_runner: Keyword.get(opts, :external_review_command_runner)
+        )
+
+      external_review = ExternalReviewGate.summary(result)
+      status = if external_review["status"] == "failed", do: "failed", else: "completed"
+
+      _ =
+        ReviewJudgeRegistry.record(
+          registry_path,
+          external_review_record_attrs(
+            job_id,
+            issue,
+            status,
+            decision_for_external_review(external_review),
+            external_review["reason_code"],
+            external_review["message"] || "external review completed",
+            %{"external_review" => external_review}
+          )
+        )
+
+      :ok
+    end
+
+    case Process.whereis(Cycle.TaskSupervisor) do
+      nil ->
+        case Task.start(task) do
+          {:ok, _pid} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _pid ->
+        case Task.Supervisor.start_child(Cycle.TaskSupervisor, task) do
+          {:ok, _pid} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp review_pending_result(issue, reason_code, message) do
+    %ReviewRouter.Result{
+      status: :skipped,
+      reason_code: reason_code,
+      message: message,
+      issue: issue,
+      details: %{"decision" => "external_review_pending"}
+    }
+  end
+
+  defp apply_external_review(%ReviewJudge.Decision{} = decision, external_review) do
+    external_review = external_review || %{}
+
+    if external_review["status"] in ["passed", nil] do
+      put_external_review(decision, external_review)
+    else
+      %ReviewJudge.Decision{
+        decision: "require_human_review",
+        confidence: "high",
+        human_review_value: "high",
+        reason: external_review["message"] || "External review requires human review.",
+        evidence: decision.evidence,
+        hard_stops: [external_review_hard_stop(external_review) | decision.hard_stops],
+        provenance: Map.put(decision.provenance || %{}, "external_review", external_review)
+      }
+    end
+  end
+
+  defp put_external_review(%ReviewJudge.Decision{} = decision, external_review) do
+    %{
+      decision
+      | provenance: Map.put(decision.provenance || %{}, "external_review", external_review)
+    }
+  end
+
+  defp external_review_hard_stop(external_review) do
+    %ReviewJudge.HardStop{
+      code: String.to_atom(external_review["reason_code"] || "external_review_failed"),
+      message: external_review["message"] || "external review requires human review",
+      details: external_review
+    }
+  end
+
+  defp external_review_hash(evidence, external_review, policy) do
+    evidence.stable_hash_input
+    |> Map.put("external_review", external_review_hash_input(external_review))
+    |> EvidenceHash.compute(
+      judge_profile: policy["policy"],
+      workflow_policy_version: evidence.workflow_policy_version,
+      global_policy_version: evidence.global_policy_version
+    )
+  end
+
+  defp external_review_hash_input(external_review) when is_map(external_review) do
+    Map.take(external_review, [
+      "provider",
+      "execution",
+      "status",
+      "reason_code",
+      "findings_count",
+      "severity_breakdown",
+      "fingerprint",
+      "workspace_path"
+    ])
+  end
+
+  defp external_review_hash_input(_external_review), do: %{}
+
+  defp review_state_for_decision(
+         policy,
+         %ReviewJudge.Decision{decision: "require_human_review"} = decision
+       ) do
+    external_review = get_in(decision.provenance || %{}, ["external_review"]) || %{}
+    external_config = policy["external_review"] || %{}
+
+    if external_review["reason_code"] == "external_review_findings" and
+         external_config["route_findings_to_rework"] == true do
+      external_config["rework_state"] || policy["review_state"]
+    else
+      policy["review_state"]
+    end
+  end
+
+  defp review_state_for_decision(policy, _decision), do: policy["review_state"]
+
+  defp decision_for_external_review(%{"status" => "passed"}),
+    do: "proceed_to_merging"
+
+  defp decision_for_external_review(_result), do: "require_human_review"
+
+  defp external_review_job_id(issue, evidence_hash) do
+    suffix =
+      evidence_hash
+      |> to_string()
+      |> String.replace("sha256:", "")
+      |> String.slice(0, 12)
+
+    "external-review-#{issue.identifier || issue.id || "issue"}-#{suffix}"
+  end
+
+  defp external_review_record_attrs(id, issue, status, decision, reason_code, message, details) do
+    %{
+      "id" => id,
+      "issue" => issue_map(issue),
+      "project" => project_map(issue.project),
+      "status" => status,
+      "decision" => decision,
+      "reason_code" => reason_code,
+      "message" => message,
+      "hard_stops" => [],
+      "details" => details
+    }
   end
 
   defp log_review_result(config, issue, %ReviewRouter.Result{} = result) do
@@ -339,12 +659,38 @@ defmodule Cycle.Reconciler do
 
   defp review_policy(config, %{workflow: workflow}) do
     workflow_policy = get_in(workflow || %{}, ["policy", "review_judge"]) || %{}
-    Map.merge(config.review_judge || %{}, workflow_policy)
+    merge_review_policy(config.review_judge || %{}, workflow_policy)
   end
 
   defp review_policy(config, project) when is_map(project) do
     workflow_policy = get_in(project, ["workflow", "policy", "review_judge"]) || %{}
-    Map.merge(config.review_judge || %{}, workflow_policy)
+    merge_review_policy(config.review_judge || %{}, workflow_policy)
+  end
+
+  defp merge_review_policy(config_policy, workflow_policy) do
+    merged = deep_merge(config_policy || %{}, workflow_policy || %{})
+    config_external = Map.get(config_policy || %{}, "external_review", %{})
+    workflow_external = Map.get(workflow_policy || %{}, "external_review", %{})
+
+    enabled? =
+      Map.get(config_external, "enabled") == true and
+        Map.get(workflow_external, "enabled") != false
+
+    put_in_path(merged, ["external_review", "enabled"], enabled?)
+  end
+
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      deep_merge(left_value, right_value)
+    end)
+  end
+
+  defp deep_merge(_left, right), do: right
+
+  defp put_in_path(map, [key], value), do: Map.put(map, key, value)
+
+  defp put_in_path(map, [key | rest], value) do
+    Map.put(map, key, put_in_path(Map.get(map, key, %{}), rest, value))
   end
 
   defp project_status(%{status: status}), do: status

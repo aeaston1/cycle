@@ -164,6 +164,7 @@ defmodule Cycle.WorkflowPolicy do
       "hard_require_human_review",
       "review_judge.hard_require_human_review"
     )
+    |> validate_optional_map(review_judge, "external_review", "review_judge.external_review")
   end
 
   defp validate_review_judge(errors, %{"review_judge" => _}),
@@ -242,7 +243,8 @@ defmodule Cycle.WorkflowPolicy do
           "reasoning_effort",
           "service_tier",
           "minimum_skip_confidence",
-          "hard_require_human_review"
+          "hard_require_human_review",
+          "external_review"
         ])
 
       _ ->
@@ -308,6 +310,14 @@ defmodule Cycle.WorkflowPolicy do
     case Map.fetch(map, key) do
       {:ok, value} when is_boolean(value) -> errors
       {:ok, _value} -> [%{path: path, reason: "must be a boolean"} | errors]
+      :error -> errors
+    end
+  end
+
+  defp validate_optional_map(errors, map, key, path) do
+    case Map.fetch(map, key) do
+      {:ok, value} when is_map(value) -> errors
+      {:ok, _value} -> [%{path: path, reason: "must be a mapping"} | errors]
       :error -> errors
     end
   end

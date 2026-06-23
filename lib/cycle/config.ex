@@ -255,7 +255,21 @@ defmodule Cycle.Config do
         "proceed_state" => "Merging",
         "policy" => "standard",
         "minimum_skip_confidence" => "medium",
-        "hard_require_human_review" => %{"paths" => [], "labels" => []}
+        "hard_require_human_review" => %{"paths" => [], "labels" => []},
+        "external_review" => %{
+          "enabled" => false,
+          "provider" => "clawpatch",
+          "execution" => "local_workspace",
+          "trigger" => "after_tentative_proceed",
+          "failure_decision" => "require_human_review",
+          "timeout_ms" => 120_000,
+          "command" => "clawpatch",
+          "args" => ["review", "--json", "--since", "origin/main"],
+          "artifact_dir" => "${CYCLE_HOME}/review-jobs",
+          "route_findings_to_rework" => true,
+          "rework_state" => "Rework",
+          "fix" => %{"enabled" => false}
+        }
       },
       "policy" => %{
         "enforcement" => "report",
@@ -288,6 +302,45 @@ defmodule Cycle.Config do
       ["engines", "managed", "openai-symphony", "default_ref"],
       Map.get(env, "CYCLE_SYMPHONY_REF")
     )
+    |> put_if_present(
+      ["review_judge", "external_review", "enabled"],
+      env_bool(env, "CYCLE_REVIEW_EXTERNAL_ENABLED")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "command"],
+      Map.get(env, "CYCLE_CLAWPATCH_COMMAND")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "args"],
+      env_args(env, "CYCLE_CLAWPATCH_ARGS")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "artifact_dir"],
+      Map.get(env, "CYCLE_REVIEW_EXTERNAL_ARTIFACT_DIR")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "clawpatch_config_path"],
+      Map.get(env, "CYCLE_CLAWPATCH_CONFIG_PATH")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "crabbox_config_path"],
+      Map.get(env, "CYCLE_CRABBOX_CONFIG_PATH")
+    )
+  end
+
+  defp env_bool(env, key) do
+    case Map.get(env, key) do
+      value when value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] -> true
+      value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] -> false
+      _ -> nil
+    end
+  end
+
+  defp env_args(env, key) do
+    case Map.get(env, key) do
+      value when is_binary(value) and value != "" -> String.split(value, " ", trim: true)
+      _ -> nil
+    end
   end
 
   defp env_path(env, key, suffix) do

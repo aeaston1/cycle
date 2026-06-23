@@ -14,6 +14,7 @@ defmodule Cycle.Policy.ReviewRouter do
   alias Cycle.Policy.EvidenceHash
   alias Cycle.Policy.ReviewJudge.Decision
   alias Cycle.ReviewJudgeRegistry
+  alias Cycle.Security
 
   defmodule Result do
     @moduledoc "Review judge Linear routing result."
@@ -59,6 +60,7 @@ defmodule Cycle.Policy.ReviewRouter do
     client = Keyword.fetch!(opts, :client)
     evidence_hash = Keyword.fetch!(opts, :evidence_hash)
     source_state = Keyword.fetch!(opts, :source_state)
+    external_review = decision_external_review(decision)
 
     with {:ok, refreshed} <- refresh_issue(client, issue, opts),
          :ok <- ensure_source_state(refreshed, source_state),
@@ -66,21 +68,30 @@ defmodule Cycle.Policy.ReviewRouter do
          {:ok, comments} <- list_comments(client, refreshed.id, opts),
          :ok <- ensure_not_duplicate(comments, evidence_hash),
          {:ok, comment} <-
-           create_comment(client, refreshed.id, comment_body(decision, evidence_hash), opts),
+           create_comment(
+             client,
+             refreshed.id,
+             comment_body(decision, evidence_hash, external_review),
+             opts
+           ),
          {:ok, moved_issue} <- maybe_move_issue(client, refreshed, decision, opts) do
       written(issue, refreshed, comment, moved_issue, decision)
+      |> attach_external_review(external_review)
       |> maybe_record_result(opts)
     else
       {:skip, reason_code, message, details} ->
         skipped(issue, reason_code, message, details)
+        |> attach_external_review(external_review)
         |> maybe_record_result(opts)
 
       {:error, stage, reason} ->
         failed(issue, stage, reason)
+        |> attach_external_review(external_review)
         |> maybe_record_result(opts)
 
       {:error, reason} ->
         failed(issue, "linear_write", reason)
+        |> attach_external_review(external_review)
         |> maybe_record_result(opts)
     end
   end
@@ -213,19 +224,22 @@ defmodule Cycle.Policy.ReviewRouter do
   defp call_update_fun(fun, _client, issue_id, state) when is_function(fun, 2),
     do: fun.(issue_id, state)
 
-  defp comment_body(%Decision{} = decision, evidence_hash) do
-    [
-      "## Cycle Review Judge",
-      "",
-      "Decision: #{decision.decision}",
-      maybe_line("Confidence", decision.confidence),
-      maybe_line("Human review value", decision.human_review_value),
-      maybe_line("Reason", decision.reason),
-      evidence_line(decision.evidence),
-      hard_stops_line(decision.hard_stops),
-      "",
-      EvidenceHash.marker_line(evidence_hash)
-    ]
+  defp comment_body(%Decision{} = decision, evidence_hash, external_review) do
+    ([
+       "## Cycle Review Judge",
+       "",
+       "Decision: #{decision.decision}",
+       maybe_line("Confidence", decision.confidence),
+       maybe_line("Human review value", decision.human_review_value),
+       maybe_line("Reason", decision.reason),
+       evidence_line(decision.evidence),
+       hard_stops_line(decision.hard_stops)
+     ] ++
+       external_review_lines(external_review) ++
+       [
+         "",
+         EvidenceHash.marker_line(evidence_hash)
+       ])
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
@@ -252,9 +266,37 @@ defmodule Cycle.Policy.ReviewRouter do
     if codes == [], do: nil, else: "Hard stops: " <> Enum.join(codes, ", ")
   end
 
+  defp external_review_lines(nil), do: []
+
+  defp external_review_lines(summary) when is_map(summary) do
+    [
+      "",
+      "External review:",
+      maybe_line("Provider", summary["provider"]),
+      maybe_line("Status", summary["status"]),
+      maybe_line("Reason code", summary["reason_code"]),
+      maybe_line("Findings", summary["findings_count"]),
+      maybe_line("Severity", severity_breakdown_text(summary["severity_breakdown"])),
+      maybe_line("Artifact", summary["artifact_path"]),
+      maybe_line("Log", summary["log_path"])
+    ]
+  end
+
+  defp severity_breakdown_text(nil), do: nil
+
+  defp severity_breakdown_text(counts) when is_map(counts) and map_size(counts) > 0 do
+    counts
+    |> Enum.sort_by(fn {severity, _count} -> to_string(severity) end)
+    |> Enum.map(fn {severity, count} -> "#{severity}=#{count}" end)
+    |> Enum.join(", ")
+  end
+
+  defp severity_breakdown_text(_counts), do: nil
+
   defp trim_text(value, max) do
     value
     |> to_string()
+    |> Security.redact()
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
     |> String.slice(0, max)
@@ -275,6 +317,12 @@ defmodule Cycle.Policy.ReviewRouter do
         "moved" => not is_nil(moved_issue)
       }
     }
+  end
+
+  defp attach_external_review(%Result{} = result, nil), do: result
+
+  defp attach_external_review(%Result{} = result, external_review) when is_map(external_review) do
+    %{result | details: Map.put(result.details || %{}, "external_review", external_review)}
   end
 
   defp skipped(issue, reason_code, message, details) do
@@ -365,6 +413,25 @@ defmodule Cycle.Policy.ReviewRouter do
   end
 
   defp decision_hard_stops(_decision), do: []
+
+  defp decision_external_review(%Decision{} = decision) do
+    provenance = decision.provenance || %{}
+
+    raw =
+      Map.get(decision, :external_review) ||
+        external_review_value(provenance) ||
+        provenance |> details_value() |> external_review_value()
+
+    ReviewJudgeRegistry.external_review_summary(raw)
+  end
+
+  defp details_value(map) when is_map(map), do: Map.get(map, "details") || Map.get(map, :details)
+  defp details_value(_value), do: nil
+
+  defp external_review_value(map) when is_map(map),
+    do: Map.get(map, "external_review") || Map.get(map, :external_review)
+
+  defp external_review_value(_value), do: nil
 
   defp present?(value), do: is_binary(value) and value != ""
 end

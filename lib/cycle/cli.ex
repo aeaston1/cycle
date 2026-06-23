@@ -448,6 +448,12 @@ defmodule Cycle.CLI do
       "  review judge: #{judge["source_queue_count"]} queued, #{judge["active_count"]} active, #{judge["duplicate_skips"]} duplicate skips, #{judge["route_failures"]} route failures"
     )
 
+    external_review = judge["external_review"] || %{}
+
+    puts(
+      "  external review: #{external_review["active"] || 0} active, #{external_review["completed"] || 0} completed, #{external_review["failures"] || 0} failures, #{external_review["findings"] || 0} findings"
+    )
+
     Enum.each(judge["last_decisions"], fn decision ->
       puts(
         "  review decision: #{get_in(decision, ["issue", "identifier"]) || "unknown"} #{decision["decision"] || decision["status"]}"

@@ -88,6 +88,7 @@ defmodule Cycle.Config.Validation do
     )
     |> require_mode("scheduler.budget.mode", get_in(config.scheduler, ["budget", "mode"]))
     |> require_mode("scheduler.rate_limit.mode", get_in(config.scheduler, ["rate_limit", "mode"]))
+    |> require_external_review(config)
     |> require_boolean("service.api.enabled", get_in(config.service, ["api", "enabled"]))
     |> require_string("service.api.bind", get_in(config.service, ["api", "bind"]))
     |> require_positive_integer("service.api.port", get_in(config.service, ["api", "port"]))
@@ -188,6 +189,92 @@ defmodule Cycle.Config.Validation do
 
   defp require_boolean(errors, path, _value),
     do: [%{path: path, reason: "must be a boolean"} | errors]
+
+  defp require_external_review(errors, %Config{} = config) do
+    external = get_in(config.review_judge, ["external_review"]) || %{}
+
+    errors
+    |> require_boolean("review_judge.external_review.enabled", Map.get(external, "enabled"))
+    |> require_one_of(
+      "review_judge.external_review.provider",
+      Map.get(external, "provider"),
+      ["clawpatch"]
+    )
+    |> require_one_of(
+      "review_judge.external_review.execution",
+      Map.get(external, "execution"),
+      ["local_workspace"]
+    )
+    |> require_one_of(
+      "review_judge.external_review.trigger",
+      Map.get(external, "trigger"),
+      ["after_tentative_proceed"]
+    )
+    |> require_one_of(
+      "review_judge.external_review.failure_decision",
+      Map.get(external, "failure_decision"),
+      ["require_human_review"]
+    )
+    |> require_positive_integer(
+      "review_judge.external_review.timeout_ms",
+      Map.get(external, "timeout_ms")
+    )
+    |> require_string("review_judge.external_review.command", Map.get(external, "command"))
+    |> require_non_empty_list("review_judge.external_review.args", Map.get(external, "args"))
+    |> require_string(
+      "review_judge.external_review.artifact_dir",
+      Map.get(external, "artifact_dir")
+    )
+    |> require_under(
+      "review_judge.external_review.artifact_dir",
+      Map.get(external, "artifact_dir"),
+      config.paths.state_dir,
+      "paths.state_dir"
+    )
+    |> require_boolean(
+      "review_judge.external_review.route_findings_to_rework",
+      Map.get(external, "route_findings_to_rework")
+    )
+    |> require_string(
+      "review_judge.external_review.rework_state",
+      Map.get(external, "rework_state")
+    )
+    |> reject_enabled_external_fix(external)
+  end
+
+  defp reject_enabled_external_fix(errors, external) do
+    case get_in(external, ["fix", "enabled"]) do
+      true ->
+        [
+          %{
+            path: "review_judge.external_review.fix.enabled",
+            reason:
+              "clawpatch fix execution is a Rework-lane follow-up and is not implemented in this release"
+          }
+          | errors
+        ]
+
+      false ->
+        errors
+
+      nil ->
+        errors
+
+      _ ->
+        [
+          %{path: "review_judge.external_review.fix.enabled", reason: "must be a boolean"}
+          | errors
+        ]
+    end
+  end
+
+  defp require_one_of(errors, path, value, allowed) do
+    if value in allowed do
+      errors
+    else
+      [%{path: path, reason: "must be one of: #{Enum.join(allowed, ", ")}"} | errors]
+    end
+  end
 
   defp require_local_bind_or_explicit_config(errors, %Config{} = config) do
     bind = get_in(config.service, ["api", "bind"])
