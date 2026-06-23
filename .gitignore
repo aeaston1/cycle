@@ -31,3 +31,7 @@ deps/
 .idea/
 .vscode/
 *.swp
+
+.clawpatch/*
+!.clawpatch/
+!.clawpatch/config.json
