@@ -344,27 +344,31 @@ defmodule Cycle.StatusSnapshot do
   end
 
   defp state_capacity(projects, runs) do
-    projects
-    |> Enum.flat_map(fn project ->
-      project.capacity
-      |> Kernel.||(%{})
-      |> Map.get("max_concurrent_agents_by_state", %{})
-      |> Enum.map(fn {state, limit} ->
-        key =
-          get_in(project.linear_project || %{}, ["id"]) ||
-            get_in(project.linear_project || %{}, ["name"])
+    Map.new(projects, fn project ->
+      project_key =
+        get_in(project.linear_project || %{}, ["id"]) ||
+          get_in(project.linear_project || %{}, ["name"]) ||
+          "unknown"
 
-        state_key = state_key(state)
+      states =
+        project.capacity
+        |> Kernel.||(%{})
+        |> Map.get("max_concurrent_agents_by_state", %{})
+        |> Map.new(fn {state, limit} ->
+          state_key = state_key(state)
 
-        used =
-          Enum.count(runs, fn run ->
-            get_in(run.project || %{}, ["id"]) == key and active_run?(run) and
-              state_key(get_in(run.issue || %{}, ["state"])) == state_key
-          end)
+          used =
+            Enum.count(runs, fn run ->
+              get_in(run.project || %{}, ["id"]) == project_key and active_run?(run) and
+                state_key(get_in(run.issue || %{}, ["state"])) == state_key
+            end)
 
-        {state, capacity(limit, used)}
-      end)
+          {state, capacity(limit, used)}
+        end)
+
+      {project_key, states}
     end)
+    |> Enum.reject(fn {_project, states} -> states == %{} end)
     |> Map.new()
   end
 

@@ -150,6 +150,19 @@ defmodule Cycle.WorkflowPolicyTest do
     assert reason =~ "invalid YAML"
   end
 
+  test "front matter closing delimiter must be its own delimiter line" do
+    assert {:error, [%{path: "workflow", reason: reason}]} =
+             WorkflowPolicy.parse("""
+             ---
+             agent:
+               max_concurrent_agents: 1
+             ---- not a delimiter
+             ---
+             """)
+
+    assert reason =~ "invalid YAML"
+  end
+
   test "invalid field types return path-level validation errors" do
     assert {:error, errors} =
              WorkflowPolicy.parse("""
@@ -191,6 +204,25 @@ defmodule Cycle.WorkflowPolicyTest do
     assert %{
              path: "worker.max_concurrent_agents_per_host",
              reason: "must be a positive integer"
+           } in errors
+  end
+
+  test "whitespace-only review strings return path-level validation errors" do
+    assert {:error, errors} =
+             WorkflowPolicy.parse("""
+             ---
+             review_judge:
+               source_state: "   "
+               external_review:
+                 rework_state: "   "
+             ---
+             """)
+
+    assert %{path: "review_judge.source_state", reason: "must be a non-empty string"} in errors
+
+    assert %{
+             path: "review_judge.external_review.rework_state",
+             reason: "must be a non-empty string"
            } in errors
   end
 

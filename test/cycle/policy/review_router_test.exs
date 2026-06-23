@@ -56,7 +56,38 @@ defmodule Cycle.Policy.ReviewRouterTest do
     refute_received :unexpected_comment
   end
 
-  test "duplicate evidence hash skips writes" do
+  test "duplicate evidence hash skips writes when state move is already complete" do
+    parent = self()
+
+    result =
+      ReviewRouter.route(
+        issue(),
+        proceed_decision(),
+        opts(
+          refresh_issue: fn _client, _issue_id ->
+            {:ok, refreshed_issue(%{state: "Merging"})}
+          end,
+          list_comments: fn _client, _issue_id ->
+            {:ok, [%Client.Comment{body: "Existing\n#{EvidenceHash.marker_line(@hash)}"}]}
+          end,
+          create_comment: fn _client, _issue_id, _body ->
+            send(parent, :unexpected_comment)
+            {:ok, comment()}
+          end,
+          update_issue_state: fn _client, _issue_id, _state ->
+            send(parent, :unexpected_move)
+            {:ok, refreshed_issue()}
+          end
+        )
+      )
+
+    assert result.status == :skipped
+    assert result.reason_code == "duplicate_evidence_hash"
+    refute_received :unexpected_comment
+    refute_received :unexpected_move
+  end
+
+  test "duplicate evidence hash still completes a missing state move" do
     parent = self()
 
     result =
@@ -70,13 +101,19 @@ defmodule Cycle.Policy.ReviewRouterTest do
           create_comment: fn _client, _issue_id, _body ->
             send(parent, :unexpected_comment)
             {:ok, comment()}
+          end,
+          update_issue_state: fn _client, issue_id, state ->
+            send(parent, {:move, issue_id, state})
+            {:ok, refreshed_issue(%{state: state})}
           end
         )
       )
 
-    assert result.status == :skipped
-    assert result.reason_code == "duplicate_evidence_hash"
+    assert result.status == :written
+    assert result.comment == nil
+    assert result.moved_issue.state == "Merging"
     refute_received :unexpected_comment
+    assert_received {:move, "issue-id", "Merging"}
   end
 
   test "human review decision posts comment and moves to review state when configured" do

@@ -613,8 +613,14 @@ defmodule Cycle.Policy.ExternalReviewGate.ClawpatchLocal do
       findings != [] ->
         :review_required
 
-      true ->
+      status in ["passed", "ok", "success", "clean", "completed"] ->
         :passed
+
+      decision in ["passed", "ok", "success", "clean", "proceed_to_merging"] ->
+        :passed
+
+      true ->
+        :failure
     end
   end
 

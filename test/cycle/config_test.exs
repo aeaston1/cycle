@@ -91,6 +91,52 @@ defmodule Cycle.ConfigTest do
     assert external["crabbox_config_path"] == "/tmp/cycle-state/crabbox.toml"
   end
 
+  test "external review args environment preserves quoted arguments" do
+    env = %{
+      "CYCLE_HOME" => "/tmp/cycle-state",
+      "CYCLE_CLAWPATCH_ARGS" =>
+        ~s(review --config "/tmp/path with spaces/config.json" --flag\\ value)
+    }
+
+    assert {:ok, config} = Config.load(env: env, home: @home)
+
+    assert get_in(config.review_judge, ["external_review", "args"]) == [
+             "review",
+             "--config",
+             "/tmp/path with spaces/config.json",
+             "--flag value"
+           ]
+  end
+
+  test "external review args environment accepts JSON arrays and rejects malformed argv" do
+    assert {:ok, config} =
+             Config.load(
+               env: %{
+                 "CYCLE_HOME" => "/tmp/cycle-state",
+                 "CYCLE_CLAWPATCH_ARGS" => ~s(["review","--json","--prompt","two words"])
+               },
+               home: @home
+             )
+
+    assert get_in(config.review_judge, ["external_review", "args"]) == [
+             "review",
+             "--json",
+             "--prompt",
+             "two words"
+           ]
+
+    assert {:error, errors} =
+             Config.load(
+               env: %{
+                 "CYCLE_HOME" => "/tmp/cycle-state",
+                 "CYCLE_CLAWPATCH_ARGS" => ~s(review "unterminated)
+               },
+               home: @home
+             )
+
+    assert %{path: "review_judge.external_review.args", reason: "must be a non-empty list"} in errors
+  end
+
   test "external review validation rejects unsupported providers and enabled fix" do
     with_temp_config(
       """

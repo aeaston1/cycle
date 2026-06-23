@@ -46,15 +46,24 @@ defmodule Cycle.WorkflowPolicy do
   end
 
   defp front_matter(content) do
-    case String.split(content, "\n", parts: 2) do
-      ["---", rest] ->
-        case String.split(rest, "\n---", parts: 2) do
-          [yaml, _body] -> {:ok, yaml}
-          [_] -> {:error, "missing YAML front matter"}
-        end
+    lines = String.split(content, "\n")
+
+    case lines do
+      ["---" | rest] ->
+        closing_front_matter(rest, [])
 
       _ ->
         {:error, "missing YAML front matter"}
+    end
+  end
+
+  defp closing_front_matter([], _yaml), do: {:error, "missing YAML front matter"}
+
+  defp closing_front_matter([line | rest], yaml) do
+    if String.trim(line) == "---" do
+      {:ok, yaml |> Enum.reverse() |> Enum.join("\n")}
+    else
+      closing_front_matter(rest, [line | yaml])
     end
   end
 
@@ -320,9 +329,18 @@ defmodule Cycle.WorkflowPolicy do
 
   defp validate_string(errors, map, key, path) do
     case Map.fetch(map, key) do
-      {:ok, value} when is_binary(value) and value != "" -> errors
-      {:ok, _value} -> [%{path: path, reason: "must be a non-empty string"} | errors]
-      :error -> errors
+      {:ok, value} when is_binary(value) ->
+        if String.trim(value) != "" do
+          errors
+        else
+          [%{path: path, reason: "must be a non-empty string"} | errors]
+        end
+
+      {:ok, _value} ->
+        [%{path: path, reason: "must be a non-empty string"} | errors]
+
+      :error ->
+        errors
     end
   end
 

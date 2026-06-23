@@ -63,18 +63,26 @@ defmodule Cycle.Policy.ReviewRouter do
     external_review = decision_external_review(decision)
 
     with {:ok, refreshed} <- refresh_issue(client, issue, opts),
-         :ok <- ensure_source_state(refreshed, source_state),
          :ok <- ensure_project_enabled(issue, refreshed),
-         {:ok, comments} <- list_comments(client, refreshed.id, opts),
-         :ok <- ensure_not_duplicate(comments, evidence_hash),
-         {:ok, comment} <-
-           create_comment(
+         {:ok, comments} <-
+           list_comments_for_routing(
              client,
-             refreshed.id,
-             comment_body(decision, evidence_hash, external_review),
+             refreshed,
+             decision,
+             evidence_hash,
+             source_state,
              opts
            ),
-         {:ok, moved_issue} <- maybe_move_issue(client, refreshed, decision, opts) do
+         {:ok, comment, moved_issue} <-
+           write_comment_and_move(
+             client,
+             refreshed,
+             decision,
+             evidence_hash,
+             external_review,
+             comments,
+             opts
+           ) do
       written(issue, refreshed, comment, moved_issue, decision)
       |> attach_external_review(external_review)
       |> maybe_record_result(opts)
@@ -93,6 +101,26 @@ defmodule Cycle.Policy.ReviewRouter do
         failed(issue, "linear_write", reason)
         |> attach_external_review(external_review)
         |> maybe_record_result(opts)
+    end
+  end
+
+  defp list_comments_for_routing(client, issue, decision, evidence_hash, source_state, opts) do
+    case ensure_source_state(issue, source_state) do
+      :ok ->
+        list_comments(client, issue.id, opts)
+
+      {:skip, _reason_code, _message, _details} = skip ->
+        if issue_in_configured_target_state?(issue, decision, opts) do
+          with {:ok, comments} <- list_comments(client, issue.id, opts) do
+            if EvidenceHash.duplicate_comment?(comments, evidence_hash) do
+              {:ok, comments}
+            else
+              skip
+            end
+          end
+        else
+          skip
+        end
     end
   end
 
@@ -156,14 +184,39 @@ defmodule Cycle.Policy.ReviewRouter do
     end
   end
 
-  defp ensure_not_duplicate(comments, evidence_hash) do
+  defp write_comment_and_move(
+         client,
+         %Client.Issue{} = issue,
+         %Decision{} = decision,
+         evidence_hash,
+         external_review,
+         comments,
+         opts
+       ) do
     if EvidenceHash.duplicate_comment?(comments, evidence_hash) do
-      {:skip, "duplicate_evidence_hash", "review judge evidence hash was already posted",
-       %{
-         "evidence_hash" => evidence_hash
-       }}
+      case target_state(issue, decision, opts) do
+        nil ->
+          {:skip, "duplicate_evidence_hash", "review judge evidence hash was already posted",
+           %{
+             "evidence_hash" => evidence_hash
+           }}
+
+        _state ->
+          with {:ok, moved_issue} <- maybe_move_issue(client, issue, decision, opts) do
+            {:ok, nil, moved_issue}
+          end
+      end
     else
-      :ok
+      with {:ok, comment} <-
+             create_comment(
+               client,
+               issue.id,
+               comment_body(decision, evidence_hash, external_review),
+               opts
+             ),
+           {:ok, moved_issue} <- maybe_move_issue(client, issue, decision, opts) do
+        {:ok, comment, moved_issue}
+      end
     end
   end
 
@@ -208,6 +261,29 @@ defmodule Cycle.Policy.ReviewRouter do
   end
 
   defp target_state(_issue, _decision, _opts), do: nil
+
+  defp issue_in_configured_target_state?(
+         %Client.Issue{state: state},
+         %Decision{} = decision,
+         opts
+       ) do
+    case configured_target_state(decision, opts) do
+      nil -> false
+      target -> state == target
+    end
+  end
+
+  defp configured_target_state(%Decision{decision: "proceed_to_merging"}, opts) do
+    state = Keyword.get(opts, :proceed_state)
+    if present?(state), do: state
+  end
+
+  defp configured_target_state(%Decision{decision: "require_human_review"}, opts) do
+    state = Keyword.get(opts, :review_state)
+    if present?(state), do: state
+  end
+
+  defp configured_target_state(_decision, _opts), do: nil
 
   defp call_issue_fun(fun, client, issue_id) when is_function(fun, 2), do: fun.(client, issue_id)
   defp call_issue_fun(fun, _client, issue_id) when is_function(fun, 1), do: fun.(issue_id)
@@ -254,6 +330,8 @@ defmodule Cycle.Policy.ReviewRouter do
     "Evidence: " <> (evidence |> Enum.map(&trim_text(&1, 160)) |> Enum.join("; "))
   end
 
+  defp evidence_line(evidence), do: evidence_line([evidence])
+
   defp hard_stops_line([]), do: nil
   defp hard_stops_line(nil), do: nil
 
@@ -293,14 +371,15 @@ defmodule Cycle.Policy.ReviewRouter do
 
   defp severity_breakdown_text(_counts), do: nil
 
-  defp trim_text(value, max) do
+  defp trim_text(value, max) when is_binary(value) do
     value
-    |> to_string()
     |> Security.redact()
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
     |> String.slice(0, max)
   end
+
+  defp trim_text(value, max), do: value |> inspect() |> trim_text(max)
 
   defp written(original, refreshed, comment, moved_issue, decision) do
     %Result{

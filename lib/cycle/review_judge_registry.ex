@@ -83,6 +83,12 @@ defmodule Cycle.ReviewJudgeRegistry do
   end
 
   def record(path, attrs, opts \\ []) when is_binary(path) and is_map(attrs) do
+    :global.trans({{__MODULE__, Path.expand(path)}, self()}, fn ->
+      do_record(path, attrs, opts)
+    end)
+  end
+
+  defp do_record(path, attrs, opts) do
     with {:ok, registry} <- load(path),
          {:ok, record} <- build_record(attrs, opts),
          :ok <- Store.write(path, to_map(%{registry | records: upsert(registry.records, record)})) do

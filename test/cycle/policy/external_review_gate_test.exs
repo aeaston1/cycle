@@ -144,6 +144,23 @@ defmodule Cycle.Policy.ExternalReviewGateTest do
     assert result.findings == []
   end
 
+  test "empty or unknown successful provider reports fail closed" do
+    for report <- [%{}, %{"status" => "typo"}] do
+      result =
+        ClawpatchLocal.review(
+          workspace(),
+          config(),
+          command_runner: fn _executable, _args, _opts ->
+            {Jason.encode!(report), 0}
+          end
+        )
+
+      assert result.status == :failure
+      assert result.decision == "require_human_review"
+      assert result.failure.code == :provider_report_failure
+    end
+  end
+
   test "rejects shell command string config without running provider" do
     parent = self()
 

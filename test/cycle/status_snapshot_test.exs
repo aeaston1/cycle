@@ -131,7 +131,7 @@ defmodule Cycle.StatusSnapshotTest do
       assert snapshot["capacity"]["global"] == %{"used" => 4, "available" => 6, "limit" => 10}
       assert snapshot["capacity"]["projects"]["project-id"]["used"] == 4
 
-      assert snapshot["capacity"]["states"]["Todo"] == %{
+      assert snapshot["capacity"]["states"]["project-id"]["Todo"] == %{
                "used" => 4,
                "available" => 0,
                "limit" => 2
@@ -149,6 +149,64 @@ defmodule Cycle.StatusSnapshotTest do
       assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "run"))
       assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "engine"))
       assert snapshot["service"]["api"]["state"] == "healthy"
+    end)
+  end
+
+  test "state capacity is preserved per project when state names overlap" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      assert :ok =
+               Store.write(Path.join(cycle_home, "projects.yaml"), %{
+                 "schema_version" => 1,
+                 "projects" => [
+                   project_record(%{
+                     "linear_project" => %{
+                       "id" => "project-a",
+                       "name" => "Project A",
+                       "slug" => "project-a",
+                       "url" => "https://linear.app/example/project/project-a"
+                     },
+                     "capacity" => %{"max_concurrent_agents_by_state" => %{"Todo" => 1}}
+                   }),
+                   project_record(%{
+                     "linear_project" => %{
+                       "id" => "project-b",
+                       "name" => "Project B",
+                       "slug" => "project-b",
+                       "url" => "https://linear.app/example/project/project-b"
+                     },
+                     "capacity" => %{"max_concurrent_agents_by_state" => %{"Todo" => 2}}
+                   })
+                 ]
+               })
+
+      assert :ok =
+               Store.write(Path.join(cycle_home, "runs.yaml"), %{
+                 "schema_version" => 1,
+                 "runs" => [
+                   run_record("run-a", "running")
+                   |> Map.put("project", %{"id" => "project-a", "name" => "Project A"}),
+                   run_record("run-b", "running")
+                   |> Map.put("project", %{"id" => "project-b", "name" => "Project B"})
+                 ]
+               })
+
+      assert {:ok, snapshot} =
+               StatusSnapshot.build(
+                 api_get: fn _url, _opts -> {:error, :closed} end,
+                 health_opts: [checked_at: @t0]
+               )
+
+      assert snapshot["capacity"]["states"]["project-a"]["Todo"] == %{
+               "used" => 1,
+               "available" => 0,
+               "limit" => 1
+             }
+
+      assert snapshot["capacity"]["states"]["project-b"]["Todo"] == %{
+               "used" => 1,
+               "available" => 1,
+               "limit" => 2
+             }
     end)
   end
 

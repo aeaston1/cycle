@@ -338,10 +338,58 @@ defmodule Cycle.Config do
 
   defp env_args(env, key) do
     case Map.get(env, key) do
-      value when is_binary(value) and value != "" -> String.split(value, " ", trim: true)
+      value when is_binary(value) and value != "" -> parse_env_args(String.trim(value))
       _ -> nil
     end
   end
+
+  defp parse_env_args(""), do: nil
+
+  defp parse_env_args("[" <> _rest = value) do
+    case Jason.decode(value) do
+      {:ok, args} when is_list(args) ->
+        if Enum.all?(args, &is_binary/1), do: args, else: :invalid_args
+
+      _ ->
+        :invalid_args
+    end
+  end
+
+  defp parse_env_args(value), do: parse_argv(String.graphemes(value), [], [], nil)
+
+  defp parse_argv([], args, current, nil) do
+    args
+    |> maybe_push_arg(current)
+    |> Enum.reverse()
+  end
+
+  defp parse_argv([], _args, _current, _quote), do: :invalid_args
+
+  defp parse_argv(["\\" | rest], args, current, quote) do
+    case rest do
+      [escaped | tail] -> parse_argv(tail, args, [escaped | current], quote)
+      [] -> :invalid_args
+    end
+  end
+
+  defp parse_argv([char | rest], args, current, nil) when char in ["'", "\""] do
+    parse_argv(rest, args, current, char)
+  end
+
+  defp parse_argv([char | rest], args, current, char) when char in ["'", "\""] do
+    parse_argv(rest, args, current, nil)
+  end
+
+  defp parse_argv([char | rest], args, current, nil) when char in [" ", "\t", "\n"] do
+    parse_argv(rest, maybe_push_arg(args, current), [], nil)
+  end
+
+  defp parse_argv([char | rest], args, current, quote) do
+    parse_argv(rest, args, [char | current], quote)
+  end
+
+  defp maybe_push_arg(args, []), do: args
+  defp maybe_push_arg(args, current), do: [current |> Enum.reverse() |> Enum.join("") | args]
 
   defp env_path(env, key, suffix) do
     case Map.get(env, key) do
