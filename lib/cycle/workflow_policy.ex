@@ -72,7 +72,7 @@ defmodule Cycle.WorkflowPolicy do
   end
 
   defp front_matter_delimiter?(line) when is_binary(line) do
-    String.starts_with?(line, "---") and String.trim_trailing(line) == "---"
+    Regex.match?(~r/^---[ \t\r]*$/, line)
   end
 
   defp parse_yaml(yaml) do

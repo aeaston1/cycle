@@ -184,6 +184,24 @@ defmodule Cycle.WorkflowPolicyTest do
              "keep this line\n---\nstill inside the scalar\n"
   end
 
+  test "front matter parser rejects delimiter prefixes as closing delimiters" do
+    for invalid_delimiter <- ["----", "---not-a-delimiter"] do
+      assert {:error, [%{path: "workflow", reason: reason}]} =
+               WorkflowPolicy.parse("""
+               ---
+               codex:
+                 marker: before
+               #{invalid_delimiter}
+               engine:
+                 id: openai-symphony@main
+               ---
+               Prompt body.
+               """)
+
+      assert reason =~ "invalid YAML"
+    end
+  end
+
   test "invalid field types return path-level validation errors" do
     assert {:error, errors} =
              WorkflowPolicy.parse("""
