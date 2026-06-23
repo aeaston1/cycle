@@ -279,16 +279,24 @@ defmodule Cycle.Policy.ExternalReviewGate.ClawpatchLocal do
   defp args(config) do
     case Map.get(config, "args", []) do
       args when is_list(args) ->
-        if Enum.all?(args, &is_binary/1) do
-          {:ok, args}
-        else
-          {:error, :invalid_config, "external review args must be a list of strings", %{}}
+        cond do
+          not Enum.all?(args, &is_binary/1) ->
+            {:error, :invalid_config, "external review args must be a list of strings", %{}}
+
+          not review_command?(args) ->
+            {:error, :invalid_config, "external review args must run clawpatch review", %{}}
+
+          true ->
+            {:ok, args}
         end
 
       _other ->
         {:error, :invalid_config, "external review args must be a list of strings", %{}}
     end
   end
+
+  defp review_command?(["review" | _args]), do: true
+  defp review_command?(_args), do: false
 
   defp timeout_ms(config) do
     case Map.get(config, "timeout_ms", @default_timeout_ms) do
@@ -538,6 +546,7 @@ defmodule Cycle.Policy.ExternalReviewGate.ClawpatchLocal do
         :review_required ->
           ExternalReviewGate.review_required(
             provider: @provider,
+            reason_code: review_reason_code(findings),
             summary: summary,
             report: report,
             command: command,
@@ -562,6 +571,9 @@ defmodule Cycle.Policy.ExternalReviewGate.ClawpatchLocal do
 
     {:ok, result}
   end
+
+  defp review_reason_code([_ | _]), do: "external_review_findings"
+  defp review_reason_code([]), do: "external_review_required"
 
   defp provider_metadata(provider_config) do
     %{

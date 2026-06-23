@@ -199,9 +199,11 @@ defmodule Cycle.Policy.ExternalReviewGate do
   def run(evidence, policy, opts) when is_map(evidence) and is_map(policy) do
     external_config = config(policy)
     workspace_path = get_in(evidence.git || %{}, ["workspace_path"])
+    run_workspace_path = get_in(evidence.run || %{}, ["workspace_path"])
 
     with :ok <- validate_config(external_config),
-         :ok <- validate_workspace(workspace_path) do
+         :ok <- validate_workspace(workspace_path),
+         :ok <- validate_workspace_match(workspace_path, run_workspace_path) do
       provider = Keyword.get(opts, :external_review_provider, provider_module(external_config))
 
       provider.review(
@@ -406,6 +408,29 @@ defmodule Cycle.Policy.ExternalReviewGate do
       not File.dir?(path) ->
         {:error, "external_review_unsafe_workspace", "external review workspace does not exist",
          %{"workspace_path" => path}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_workspace_match(workspace_path, run_workspace_path) do
+    cond do
+      not is_binary(run_workspace_path) ->
+        :ok
+
+      Path.type(run_workspace_path) != :absolute ->
+        {:error, "external_review_unsafe_workspace",
+         "external review run workspace must be absolute",
+         %{"workspace_path" => inspect(run_workspace_path)}}
+
+      Path.expand(workspace_path) != Path.expand(run_workspace_path) ->
+        {:error, "external_review_workspace_mismatch",
+         "external review workspace does not match run evidence",
+         %{
+           "git_workspace_path" => workspace_path,
+           "run_workspace_path" => run_workspace_path
+         }}
 
       true ->
         :ok

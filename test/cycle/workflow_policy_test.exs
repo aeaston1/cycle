@@ -71,6 +71,56 @@ defmodule Cycle.WorkflowPolicyTest do
     assert policy.hash =~ ~r/^sha256:[0-9a-f]{64}$/
   end
 
+  test "workflow external review extracts only project-level refinements" do
+    assert {:ok, policy} =
+             WorkflowPolicy.parse("""
+             ---
+             review_judge:
+               external_review:
+                 enabled: false
+                 route_findings_to_rework: false
+                 rework_state: Human Review
+             ---
+             Fixture workflow.
+             """)
+
+    assert policy.review_judge["external_review"] == %{
+             "enabled" => false,
+             "route_findings_to_rework" => false,
+             "rework_state" => "Human Review"
+           }
+  end
+
+  test "workflow external review rejects operator-owned provider wiring" do
+    assert {:error, errors} =
+             WorkflowPolicy.parse("""
+             ---
+             review_judge:
+               external_review:
+                 command: clawpatch
+                 args:
+                   - fix
+                 artifact_dir: /tmp/reviews
+             ---
+             Fixture workflow.
+             """)
+
+    assert %{
+             path: "review_judge.external_review.command",
+             reason: "belongs in Cycle operator config"
+           } in errors
+
+    assert %{
+             path: "review_judge.external_review.args",
+             reason: "belongs in Cycle operator config"
+           } in errors
+
+    assert %{
+             path: "review_judge.external_review.artifact_dir",
+             reason: "belongs in Cycle operator config"
+           } in errors
+  end
+
   test "missing front matter returns invalid workflow error" do
     assert {:error, [%{path: "workflow", reason: "missing YAML front matter"}]} =
              WorkflowPolicy.parse("agent:\n  max_concurrent_agents: 1\n")

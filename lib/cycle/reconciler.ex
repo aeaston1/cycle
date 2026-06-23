@@ -304,7 +304,7 @@ defmodule Cycle.Reconciler do
            client: client,
            evidence_hash: evidence_hash,
            source_state: policy["source_state"],
-           review_state: review_state_for_decision(policy, decision),
+           review_state: review_state_for_decision(config, issue, policy, decision),
            proceed_state: policy["proceed_state"],
            review_judge_registry_path: ReviewJudgeRegistry.path(config.paths.state_dir),
            refresh_issue: Keyword.get(opts, :review_refresh_issue, &Client.refresh_issue/2),
@@ -334,8 +334,11 @@ defmodule Cycle.Reconciler do
     if ExternalReviewGate.enabled?(policy) do
       registry_path = ReviewJudgeRegistry.path(config.paths.state_dir)
       job_id = external_review_job_id(issue, base_evidence_hash)
+      external_config = ExternalReviewGate.config(policy)
+      timeout_ms = ExternalReviewGate.timeout_ms(external_config)
+      now = Keyword.get_lazy(opts, :now, fn -> DateTime.utc_now() end)
 
-      case external_review_record(registry_path, job_id) do
+      case external_review_record(registry_path, job_id, timeout_ms, now) do
         {:completed, external_review} ->
           final_decision = apply_external_review(decision, external_review)
           final_hash = external_review_hash(evidence, external_review, policy)
@@ -384,7 +387,7 @@ defmodule Cycle.Reconciler do
        ),
        do: {:ready, decision, evidence_hash}
 
-  defp external_review_record(path, job_id) do
+  defp external_review_record(path, job_id, timeout_ms, now) do
     case ReviewJudgeRegistry.load(path) do
       {:ok, registry} ->
         registry.records
@@ -393,18 +396,76 @@ defmodule Cycle.Reconciler do
           nil ->
             :missing
 
-          %{status: "completed", details: details} ->
-            {:completed, details["external_review"] || %{}}
+          %{status: "completed"} = record ->
+            {:completed, completed_external_review(record)}
 
-          %{status: "failed", details: details} ->
-            {:completed, details["external_review"] || %{}}
+          %{status: "failed"} = record ->
+            {:completed, completed_external_review(record)}
 
-          _record ->
-            :active
+          %{status: "active"} = record ->
+            if stale_external_review_record?(record, timeout_ms, now) do
+              {:completed, stale_external_review(record)}
+            else
+              :active
+            end
+
+          record ->
+            {:completed, incomplete_external_review(record)}
         end
 
       {:error, _reason} ->
         :missing
+    end
+  end
+
+  defp completed_external_review(%ReviewJudgeRegistry.Record{details: details} = record) do
+    case details["external_review"] do
+      external_review when is_map(external_review) and map_size(external_review) > 0 ->
+        external_review
+
+      _missing ->
+        incomplete_external_review(record)
+    end
+  end
+
+  defp incomplete_external_review(record) do
+    %{
+      "provider" => "clawpatch",
+      "execution" => "local_workspace",
+      "status" => "failed",
+      "reason_code" => record.reason_code || "external_review_missing_result",
+      "message" => record.message || "external review result is missing",
+      "details" => %{"record_status" => record.status}
+    }
+  end
+
+  defp stale_external_review(record) do
+    %{
+      "provider" => "clawpatch",
+      "execution" => "local_workspace",
+      "status" => "failed",
+      "reason_code" => "external_review_timeout",
+      "message" => "external review did not complete before timeout",
+      "details" => %{"record_status" => record.status}
+    }
+  end
+
+  defp stale_external_review_record?(%ReviewJudgeRegistry.Record{} = record, timeout_ms, now) do
+    case record_updated_at(record) do
+      {:ok, updated_at} ->
+        DateTime.diff(now, updated_at, :millisecond) >= timeout_ms
+
+      :error ->
+        true
+    end
+  end
+
+  defp record_updated_at(%ReviewJudgeRegistry.Record{timestamps: timestamps}) do
+    with updated_at when is_binary(updated_at) <- timestamps["updated_at"],
+         {:ok, datetime, _offset} <- DateTime.from_iso8601(updated_at) do
+      {:ok, datetime}
+    else
+      _ -> :error
     end
   end
 
@@ -521,7 +582,7 @@ defmodule Cycle.Reconciler do
   defp apply_external_review(%ReviewJudge.Decision{} = decision, external_review) do
     external_review = external_review || %{}
 
-    if external_review["status"] in ["passed", nil] do
+    if external_review["status"] == "passed" do
       put_external_review(decision, external_review)
     else
       %ReviewJudge.Decision{
@@ -577,21 +638,25 @@ defmodule Cycle.Reconciler do
   defp external_review_hash_input(_external_review), do: %{}
 
   defp review_state_for_decision(
+         config,
+         issue,
          policy,
          %ReviewJudge.Decision{decision: "require_human_review"} = decision
        ) do
     external_review = get_in(decision.provenance || %{}, ["external_review"]) || %{}
     external_config = policy["external_review"] || %{}
+    rework_state = external_config["rework_state"]
 
     if external_review["reason_code"] == "external_review_findings" and
-         external_config["route_findings_to_rework"] == true do
-      external_config["rework_state"] || policy["review_state"]
+         external_config["route_findings_to_rework"] == true and
+         rework_state in scheduler_active_states(config, issue.project || %{}) do
+      rework_state
     else
       policy["review_state"]
     end
   end
 
-  defp review_state_for_decision(policy, _decision), do: policy["review_state"]
+  defp review_state_for_decision(_config, _issue, policy, _decision), do: policy["review_state"]
 
   defp decision_for_external_review(%{"status" => "passed"}),
     do: "proceed_to_merging"
@@ -634,7 +699,7 @@ defmodule Cycle.Reconciler do
 
   defp scheduler_active_states(config, project) do
     states =
-      get_in(project.workflow || %{}, ["policy", "tracker", "active_states"]) ||
+      get_in(project_workflow(project), ["policy", "tracker", "active_states"]) ||
         get_in(config.linear, ["active_states"]) ||
         []
 
@@ -647,6 +712,13 @@ defmodule Cycle.Reconciler do
     |> Enum.reject(&(&1 in review_states))
     |> Enum.uniq()
   end
+
+  defp project_workflow(%{workflow: workflow}), do: workflow || %{}
+
+  defp project_workflow(project) when is_map(project),
+    do: Map.get(project, "workflow", %{}) || %{}
+
+  defp project_workflow(_project), do: %{}
 
   defp review_enabled?(config, project) do
     review_policy(config, project)["enabled"] == true and
@@ -668,7 +740,8 @@ defmodule Cycle.Reconciler do
   end
 
   defp merge_review_policy(config_policy, workflow_policy) do
-    merged = deep_merge(config_policy || %{}, workflow_policy || %{})
+    workflow_policy = sanitize_workflow_review_policy(workflow_policy || %{})
+    merged = deep_merge(config_policy || %{}, workflow_policy)
     config_external = Map.get(config_policy || %{}, "external_review", %{})
     workflow_external = Map.get(workflow_policy || %{}, "external_review", %{})
 
@@ -677,6 +750,24 @@ defmodule Cycle.Reconciler do
         Map.get(workflow_external, "enabled") != false
 
     put_in_path(merged, ["external_review", "enabled"], enabled?)
+  end
+
+  defp sanitize_workflow_review_policy(workflow_policy) do
+    case Map.get(workflow_policy, "external_review") do
+      external_review when is_map(external_review) ->
+        Map.put(
+          workflow_policy,
+          "external_review",
+          Map.take(external_review, [
+            "enabled",
+            "route_findings_to_rework",
+            "rework_state"
+          ])
+        )
+
+      _other ->
+        workflow_policy
+    end
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do

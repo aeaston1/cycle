@@ -2,8 +2,10 @@ defmodule Cycle.Policy.ExternalReviewGateTest do
   use ExUnit.Case, async: true
 
   alias Cycle.Policy.ExternalReviewGate
+  alias Cycle.Policy.ExternalReviewGate.Clawpatch
   alias Cycle.Policy.ExternalReviewGate.ClawpatchLocal
   alias Cycle.Policy.ExternalReviewGate.Result
+  alias Cycle.Policy.ReviewEvidence.Evidence
 
   test "facade delegates to injected provider" do
     assert %Result{status: :passed, provider: "fake"} =
@@ -20,6 +22,47 @@ defmodule Cycle.Policy.ExternalReviewGateTest do
              ExternalReviewGate.review(workspace(), %{"enabled" => false},
                provider: UnexpectedProvider
              )
+  end
+
+  test "run rejects mismatched evidence workspaces before invoking provider" do
+    git_workspace = workspace()
+    run_workspace = workspace()
+
+    result =
+      ExternalReviewGate.run(
+        %{
+          git: %{"workspace_path" => git_workspace},
+          run: %{"workspace_path" => run_workspace}
+        },
+        %{
+          "external_review" => %{
+            "enabled" => true,
+            "provider" => "clawpatch",
+            "execution" => "local_workspace"
+          }
+        },
+        external_review_provider: UnexpectedProvider
+      )
+
+    assert result.status == "failed"
+    assert result.decision == "require_human_review"
+    assert result.reason_code == "external_review_workspace_mismatch"
+  end
+
+  test "compatibility run respects disabled config without invoking provider" do
+    result =
+      Clawpatch.run(
+        %Evidence{},
+        %{"enabled" => false},
+        workspace_path: workspace(),
+        command_runner: fn _executable, _args, _opts ->
+          raise "disabled external review should not invoke a provider"
+        end
+      )
+
+    assert result.status == :skipped
+    assert result.decision == nil
+    refute result.review_required
   end
 
   test "runs executable args in the workspace and normalizes a clean JSON report" do
@@ -85,6 +128,22 @@ defmodule Cycle.Policy.ExternalReviewGateTest do
     assert finding.rule_id == "readonly-boundary"
   end
 
+  test "status-only review requirement is not labeled as findings" do
+    result =
+      ClawpatchLocal.review(
+        workspace(),
+        config(),
+        command_runner: fn _executable, _args, _opts ->
+          {Jason.encode!(%{"status" => "blocked", "summary" => "provider blocked"}), 0}
+        end
+      )
+
+    assert result.status == :review_required
+    assert result.decision == "require_human_review"
+    assert result.reason_code == "external_review_required"
+    assert result.findings == []
+  end
+
   test "rejects shell command string config without running provider" do
     parent = self()
 
@@ -92,6 +151,29 @@ defmodule Cycle.Policy.ExternalReviewGateTest do
       ClawpatchLocal.review(
         workspace(),
         %{"command" => "clawpatch review --json", "artifact_dir" => artifact_dir()},
+        command_runner: fn _executable, _args, _opts ->
+          send(parent, :unexpected_command)
+          {"{}", 0}
+        end
+      )
+
+    assert result.status == :failure
+    assert result.decision == "require_human_review"
+    assert result.failure.code == :invalid_config
+    refute_received :unexpected_command
+  end
+
+  test "rejects non-review clawpatch args without running provider" do
+    parent = self()
+
+    result =
+      ClawpatchLocal.review(
+        workspace(),
+        %{
+          "executable" => "clawpatch",
+          "args" => ["fix", "--finding", "finding-1"],
+          "artifact_dir" => artifact_dir()
+        },
         command_runner: fn _executable, _args, _opts ->
           send(parent, :unexpected_command)
           {"{}", 0}
@@ -317,12 +399,14 @@ defmodule Cycle.Policy.ExternalReviewGateTest do
 
   defp workspace do
     path = Path.join(System.tmp_dir!(), "cycle-clawpatch-workspace-#{unique()}")
+    File.rm_rf!(path)
     File.mkdir_p!(path)
     path
   end
 
   defp artifact_dir do
     path = Path.join(System.tmp_dir!(), "cycle-clawpatch-artifacts-#{unique()}")
+    File.rm_rf!(path)
     File.mkdir_p!(path)
     path
   end

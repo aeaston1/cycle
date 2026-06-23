@@ -24,9 +24,13 @@ defmodule Cycle.Policy.ExternalReviewGate.Clawpatch do
     started_at = System.monotonic_time(:millisecond)
 
     result =
-      workspace_path
-      |> ExternalReviewGate.ClawpatchLocal.review(Map.put_new(config, "enabled", true), opts)
-      |> normalize(config, evidence, workspace_path, started_at)
+      if Map.get(config, "enabled", true) == false do
+        ExternalReviewGate.skipped("external review is disabled")
+      else
+        workspace_path
+        |> ExternalReviewGate.ClawpatchLocal.review(Map.put_new(config, "enabled", true), opts)
+        |> normalize(config, evidence, workspace_path, started_at)
+      end
 
     %{result | fingerprint: result.fingerprint || ExternalReviewGate.fingerprint(result)}
   end
