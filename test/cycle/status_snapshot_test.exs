@@ -131,7 +131,7 @@ defmodule Cycle.StatusSnapshotTest do
       assert snapshot["capacity"]["global"] == %{"used" => 4, "available" => 6, "limit" => 10}
       assert snapshot["capacity"]["projects"]["project-id"]["used"] == 4
 
-      assert snapshot["capacity"]["states"]["Todo"] == %{
+      assert snapshot["capacity"]["states"]["project-id"]["Todo"] == %{
                "used" => 4,
                "available" => 0,
                "limit" => 2
@@ -149,6 +149,64 @@ defmodule Cycle.StatusSnapshotTest do
       assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "run"))
       assert Enum.any?(snapshot["last_errors"], &(&1["source"] == "engine"))
       assert snapshot["service"]["api"]["state"] == "healthy"
+    end)
+  end
+
+  test "state capacity is preserved per project when state names overlap" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      assert :ok =
+               Store.write(Path.join(cycle_home, "projects.yaml"), %{
+                 "schema_version" => 1,
+                 "projects" => [
+                   project_record(%{
+                     "linear_project" => %{
+                       "id" => "project-a",
+                       "name" => "Project A",
+                       "slug" => "project-a",
+                       "url" => "https://linear.app/example/project/project-a"
+                     },
+                     "capacity" => %{"max_concurrent_agents_by_state" => %{"Todo" => 1}}
+                   }),
+                   project_record(%{
+                     "linear_project" => %{
+                       "id" => "project-b",
+                       "name" => "Project B",
+                       "slug" => "project-b",
+                       "url" => "https://linear.app/example/project/project-b"
+                     },
+                     "capacity" => %{"max_concurrent_agents_by_state" => %{"Todo" => 2}}
+                   })
+                 ]
+               })
+
+      assert :ok =
+               Store.write(Path.join(cycle_home, "runs.yaml"), %{
+                 "schema_version" => 1,
+                 "runs" => [
+                   run_record("run-a", "running")
+                   |> Map.put("project", %{"id" => "project-a", "name" => "Project A"}),
+                   run_record("run-b", "running")
+                   |> Map.put("project", %{"id" => "project-b", "name" => "Project B"})
+                 ]
+               })
+
+      assert {:ok, snapshot} =
+               StatusSnapshot.build(
+                 api_get: fn _url, _opts -> {:error, :closed} end,
+                 health_opts: [checked_at: @t0]
+               )
+
+      assert snapshot["capacity"]["states"]["project-a"]["Todo"] == %{
+               "used" => 1,
+               "available" => 0,
+               "limit" => 1
+             }
+
+      assert snapshot["capacity"]["states"]["project-b"]["Todo"] == %{
+               "used" => 1,
+               "available" => 1,
+               "limit" => 2
+             }
     end)
   end
 
@@ -236,8 +294,38 @@ defmodule Cycle.StatusSnapshotTest do
       assert [%{"issue" => %{"identifier" => "AEA-170"}, "decision" => "require_human_review"}] =
                judge["last_decisions"]
 
+      decision_record = Enum.find(judge["records"], &(&1["issue"]["identifier"] == "AEA-170"))
+
+      external_review = decision_record["details"]["external_review"]
+
+      assert Map.take(external_review, [
+               "provider",
+               "status",
+               "reason_code",
+               "findings_count",
+               "severity_breakdown",
+               "artifact_path",
+               "log_path"
+             ]) == %{
+               "provider" => "clawpatch",
+               "status" => "completed",
+               "reason_code" => "blocking_findings",
+               "findings_count" => 2,
+               "severity_breakdown" => %{"high" => 1, "medium" => 1},
+               "artifact_path" => "/tmp/cycle/reviews/AEA-170.json",
+               "log_path" => "/tmp/cycle/reviews/AEA-170.log"
+             }
+
       assert Enum.any?(judge["records"], &(&1["reason_code"] == "linear_write_failed"))
-      refute Jason.encode!(judge) =~ "lin_secret_token"
+      encoded = Jason.encode!(judge)
+      refute encoded =~ "lin_secret_token"
+      refute encoded =~ "RAW_STDOUT_SHOULD_NOT_LEAK"
+      refute encoded =~ "RAW_STDERR_SHOULD_NOT_LEAK"
+      refute encoded =~ "RAW_PATCH_SHOULD_NOT_LEAK"
+      refute encoded =~ "RAW_DIFF_SHOULD_NOT_LEAK"
+      refute encoded =~ "RAW_PROMPT_SHOULD_NOT_LEAK"
+      refute encoded =~ "provider_config"
+      refute encoded =~ "review.example.invalid"
     end)
   end
 
@@ -344,7 +432,29 @@ defmodule Cycle.StatusSnapshotTest do
                    "decision" => "require_human_review",
                    "message" => "Hard stop requires human review.",
                    "hard_stops" => [%{"code" => "sensitive_surface"}],
-                   "details" => %{"body" => "Bearer lin_secret_token_123456789012345678901234"},
+                   "details" => %{
+                     "body" => "Bearer lin_secret_token_123456789012345678901234",
+                     "external_review" => %{
+                       "provider" => "clawpatch",
+                       "status" => "completed",
+                       "reason_code" => "blocking_findings",
+                       "findings" => [
+                         %{"severity" => "high", "body" => "RAW_FINDING_BODY_SHOULD_NOT_LEAK"},
+                         %{
+                           "severity" => "medium",
+                           "body" => "RAW_SECOND_FINDING_SHOULD_NOT_LEAK"
+                         }
+                       ],
+                       "artifact_path" => "/tmp/cycle/reviews/AEA-170.json",
+                       "log_path" => "/tmp/cycle/reviews/AEA-170.log",
+                       "stdout" => "RAW_STDOUT_SHOULD_NOT_LEAK",
+                       "stderr" => "RAW_STDERR_SHOULD_NOT_LEAK",
+                       "patch" => "RAW_PATCH_SHOULD_NOT_LEAK",
+                       "full_diff" => "RAW_DIFF_SHOULD_NOT_LEAK",
+                       "prompt" => "RAW_PROMPT_SHOULD_NOT_LEAK",
+                       "provider_config" => %{"endpoint" => "https://review.example.invalid"}
+                     }
+                   },
                    "timestamps" => %{"updated_at" => @t0}
                  },
                  %{

@@ -95,6 +95,34 @@ defmodule Cycle.CLITest do
     refute File.exists?(Path.join([config_parent, "cycle", "config.env"]))
   end
 
+  test "linear configure writes direct api key through a restricted config file" do
+    config_parent =
+      Path.join(System.tmp_dir!(), "cycle-cli-test-#{System.unique_integer([:positive])}")
+
+    config_dir = Path.join(config_parent, "cycle")
+    config_file = Path.join(config_dir, "config.yaml")
+    previous_config_home = System.get_env("XDG_CONFIG_HOME")
+
+    File.mkdir_p!(config_dir)
+    File.write!(config_file, "linear:\n  api_key_env: OLD_KEY\n")
+    File.chmod!(config_file, 0o644)
+    System.put_env("XDG_CONFIG_HOME", config_parent)
+
+    on_exit(fn ->
+      restore_env("XDG_CONFIG_HOME", previous_config_home)
+      File.rm_rf(config_parent)
+    end)
+
+    output =
+      capture_io(fn ->
+        assert Cycle.CLI.run(["linear", "configure", "--api-key", "lin_direct_secret"]) == :ok
+      end)
+
+    assert output =~ "Saved Linear configuration to #{config_file}"
+    assert File.read!(config_file) == "linear:\n  api_key: \"lin_direct_secret\"\n"
+    assert Bitwise.band(File.stat!(config_file).mode, 0o777) == 0o600
+  end
+
   test "linear configure rejects mutually exclusive modes" do
     assert Cycle.CLI.run(["linear", "configure", "--from-env", "--api-key", "lin_test"]) ==
              {:error, "choose only one of --from-env, --api-key, or --print", 1}
@@ -252,6 +280,33 @@ defmodule Cycle.CLITest do
                })
 
       assert lock.resolved_revision == second_revision
+    end)
+  end
+
+  test "symphony install rejects changed repo for existing checkout" do
+    with_cycle_home(fn _cycle_home ->
+      source = symphony_fixture_repo()
+      other_source = symphony_fixture_repo()
+
+      capture_io(fn ->
+        assert Cycle.CLI.run(["symphony", "install", "--repo", source, "--version", "main"]) ==
+                 :ok
+      end)
+
+      capture_io(fn ->
+        assert {:error, message, 3} =
+                 Cycle.CLI.run([
+                   "symphony",
+                   "install",
+                   "--repo",
+                   other_source,
+                   "--version",
+                   "main"
+                 ])
+
+        assert message =~ "existing Symphony checkout origin"
+        assert message =~ "does not match requested repo"
+      end)
     end)
   end
 

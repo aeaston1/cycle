@@ -79,22 +79,40 @@ defmodule Cycle.PolicyPropagation do
     with {:ok, yaml, body} <- split_front_matter(content),
          {:ok, data} <- parse_yaml(yaml),
          {:ok, updated_yaml} <- apply_records(yaml, data, records) do
-      {:ok, ["---\n", updated_yaml, "---", body] |> IO.iodata_to_binary()}
+      closing_prefix = if String.ends_with?(updated_yaml, "\n"), do: "---", else: "\n---"
+      {:ok, ["---\n", updated_yaml, closing_prefix, body] |> IO.iodata_to_binary()}
     end
   end
 
   defp split_front_matter(content) do
-    case String.split(content, "\n", parts: 2) do
-      ["---", rest] ->
-        case String.split(rest, "\n---", parts: 2) do
-          [yaml, body] -> {:ok, yaml, body}
-          [_] -> {:error, "workflow is missing closing YAML front matter marker"}
+    case String.split(content, "\n", trim: false) do
+      [line | rest] ->
+        if front_matter_delimiter?(line) do
+          collect_front_matter(rest, [])
+        else
+          {:error, "workflow is missing YAML front matter"}
         end
 
       _ ->
         {:error, "workflow is missing YAML front matter"}
     end
   end
+
+  defp collect_front_matter([], _yaml),
+    do: {:error, "workflow is missing closing YAML front matter marker"}
+
+  defp collect_front_matter([line | rest], yaml) do
+    if front_matter_delimiter?(line) do
+      {:ok, yaml |> Enum.reverse() |> Enum.join("\n"), body_from_lines(rest)}
+    else
+      collect_front_matter(rest, [line | yaml])
+    end
+  end
+
+  defp body_from_lines([]), do: ""
+  defp body_from_lines(lines), do: "\n" <> Enum.join(lines, "\n")
+
+  defp front_matter_delimiter?(line), do: Regex.match?(~r/^---[ \t\r]*$/, line)
 
   defp parse_yaml(yaml) do
     case YamlElixir.read_from_string(yaml) do

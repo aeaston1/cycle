@@ -255,7 +255,21 @@ defmodule Cycle.Config do
         "proceed_state" => "Merging",
         "policy" => "standard",
         "minimum_skip_confidence" => "medium",
-        "hard_require_human_review" => %{"paths" => [], "labels" => []}
+        "hard_require_human_review" => %{"paths" => [], "labels" => []},
+        "external_review" => %{
+          "enabled" => false,
+          "provider" => "clawpatch",
+          "execution" => "local_workspace",
+          "trigger" => "after_tentative_proceed",
+          "failure_decision" => "require_human_review",
+          "timeout_ms" => 120_000,
+          "command" => "clawpatch",
+          "args" => ["review", "--json", "--since", "origin/main"],
+          "artifact_dir" => "${CYCLE_HOME}/review-jobs",
+          "route_findings_to_rework" => true,
+          "rework_state" => "Rework",
+          "fix" => %{"enabled" => false}
+        }
       },
       "policy" => %{
         "enforcement" => "report",
@@ -288,7 +302,94 @@ defmodule Cycle.Config do
       ["engines", "managed", "openai-symphony", "default_ref"],
       Map.get(env, "CYCLE_SYMPHONY_REF")
     )
+    |> put_if_present(
+      ["review_judge", "external_review", "enabled"],
+      env_bool(env, "CYCLE_REVIEW_EXTERNAL_ENABLED")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "command"],
+      Map.get(env, "CYCLE_CLAWPATCH_COMMAND")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "args"],
+      env_args(env, "CYCLE_CLAWPATCH_ARGS")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "artifact_dir"],
+      Map.get(env, "CYCLE_REVIEW_EXTERNAL_ARTIFACT_DIR")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "clawpatch_config_path"],
+      Map.get(env, "CYCLE_CLAWPATCH_CONFIG_PATH")
+    )
+    |> put_if_present(
+      ["review_judge", "external_review", "crabbox_config_path"],
+      Map.get(env, "CYCLE_CRABBOX_CONFIG_PATH")
+    )
   end
+
+  defp env_bool(env, key) do
+    case Map.get(env, key) do
+      value when value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] -> true
+      value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] -> false
+      _ -> nil
+    end
+  end
+
+  defp env_args(env, key) do
+    case Map.get(env, key) do
+      value when is_binary(value) and value != "" -> parse_env_args(String.trim(value))
+      _ -> nil
+    end
+  end
+
+  defp parse_env_args(""), do: nil
+
+  defp parse_env_args("[" <> _rest = value) do
+    case Jason.decode(value) do
+      {:ok, args} when is_list(args) ->
+        if Enum.all?(args, &is_binary/1), do: args, else: :invalid_args
+
+      _ ->
+        :invalid_args
+    end
+  end
+
+  defp parse_env_args(value), do: parse_argv(String.graphemes(value), [], [], nil)
+
+  defp parse_argv([], args, current, nil) do
+    args
+    |> maybe_push_arg(current)
+    |> Enum.reverse()
+  end
+
+  defp parse_argv([], _args, _current, _quote), do: :invalid_args
+
+  defp parse_argv(["\\" | rest], args, current, quote) do
+    case rest do
+      [escaped | tail] -> parse_argv(tail, args, [escaped | current], quote)
+      [] -> :invalid_args
+    end
+  end
+
+  defp parse_argv([char | rest], args, current, nil) when char in ["'", "\""] do
+    parse_argv(rest, args, current, char)
+  end
+
+  defp parse_argv([char | rest], args, current, char) when char in ["'", "\""] do
+    parse_argv(rest, args, current, nil)
+  end
+
+  defp parse_argv([char | rest], args, current, nil) when char in [" ", "\t", "\n"] do
+    parse_argv(rest, maybe_push_arg(args, current), [], nil)
+  end
+
+  defp parse_argv([char | rest], args, current, quote) do
+    parse_argv(rest, args, [char | current], quote)
+  end
+
+  defp maybe_push_arg(args, []), do: args
+  defp maybe_push_arg(args, current), do: [current |> Enum.reverse() |> Enum.join("") | args]
 
   defp env_path(env, key, suffix) do
     case Map.get(env, key) do

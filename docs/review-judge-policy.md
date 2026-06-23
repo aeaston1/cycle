@@ -138,6 +138,40 @@ The hash should include:
 The hash should exclude volatile timestamps unless they represent meaningful
 evidence.
 
+If an optional external reviewer is added later, its stable fingerprint should
+be included in the evidence hash input. A changed external review fingerprint
+must produce a different hash so Cycle does not skip a meaningfully different
+judgement as a duplicate.
+
+External review evidence must be tied to the inspected workspace. Cycle's guard
+source is `evidence.git["workspace_path"]`; if git evidence comes from a
+different workspace than the run evidence, Cycle should require human review
+before trusting the automated result.
+
+## External Review And Fix Boundaries
+
+External review providers are planned evidence sources, not state machines.
+They should feed findings, fingerprints, and summaries into Cycle-owned review
+policy. They should not move Linear issues, post comments directly, mutate
+workspaces outside the inspected checkout, or replace Cycle's duplicate-hash
+and stale-state checks.
+
+The local Clawpatch provider should reuse existing repo-local Clawpatch and
+Crabbox config when present, or explicit operator config paths when supplied.
+When no Crabbox config exists, Cycle may create a review-job artifact that uses
+the opinionated Crabbox-on-Cloudflare-Workers default. That artifact is
+Cycle-owned state; it is not written into the project repo and it must not
+contain Cloudflare credentials.
+
+Human Review is review-only. Cycle must not invoke an automated fix path for an
+issue just because it is in `Human Review`; that state is where Cycle decides
+whether the existing change can proceed or needs a person.
+
+Automated fix support for `Rework` is planned but disabled in v1. Until an
+operator explicitly enables a future fix provider, `Rework` should be handled
+by the normal execution engine lifecycle and reviewer feedback should remain
+visible to the agent and operator.
+
 ## Linear Write Safety
 
 Before posting or moving an issue, Cycle should:

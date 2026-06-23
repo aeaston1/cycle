@@ -113,6 +113,24 @@ review_judge:
   hard_require_human_review:
     paths: []
     labels: []
+  external_review:
+    enabled: false
+    provider: clawpatch
+    execution: local_workspace
+    trigger: after_tentative_proceed
+    failure_decision: require_human_review
+    timeout_ms: 120000
+    command: clawpatch
+    args:
+      - review
+      - --json
+      - --since
+      - origin/main
+    artifact_dir: ${CYCLE_HOME}/review-jobs
+    route_findings_to_rework: true
+    rework_state: Rework
+    fix:
+      enabled: false
 
 policy:
   enforcement: report
@@ -135,6 +153,35 @@ stores `linear.api_key_env: LINEAR_API_KEY`; with `--api-key`, it stores the
 provided token directly in the operator config file with mode `0600`.
 `foreground_unattended` is intentionally false by default. Full dispatch policy
 profiles beyond the default global policy fields are roadmap behavior.
+
+External review providers are disabled by default. If
+`review_judge.external_review.enabled` is false, Cycle must not call external
+review or fix tools. The implemented local provider config is intentionally
+structured as `command` plus `args`; shell command strings are rejected. Human
+Review remains a review-routing state only: Cycle may post the review judge
+summary and route to `Merging`, but it must not apply automated fixes from that
+state. `Rework` remains a normal active execution state, and the `fix.enabled`
+setting is rejected in v1 because automated fix execution is not implemented.
+
+The local external review fields can be overridden with:
+
+```sh
+CYCLE_REVIEW_EXTERNAL_ENABLED=true
+CYCLE_CLAWPATCH_COMMAND=clawpatch
+CYCLE_CLAWPATCH_ARGS="review --json --since origin/main"
+CYCLE_REVIEW_EXTERNAL_ARTIFACT_DIR=${CYCLE_HOME}/review-jobs
+CYCLE_CLAWPATCH_CONFIG_PATH=/path/to/clawpatch.json
+CYCLE_CRABBOX_CONFIG_PATH=/path/to/crabbox.toml
+```
+
+When the local provider runs, Cycle first looks for explicit
+`clawpatch_config_path` and `crabbox_config_path` values, then for common
+Clawpatch and Crabbox config files in the inspected workspace. If no Crabbox
+config exists and an artifact directory is configured, Cycle writes a
+Cycle-owned `cycle-crabbox.cloudflare-workers.json` fallback under that review
+job artifact directory. The fallback declares Cloudflare Workers as the Crabbox
+runtime and expects credentials/provisioning to come from an external plugin;
+Cycle does not write Cloudflare secrets into project repos.
 
 Scheduler budget and rate-limit gates accept `mode: off`, `mode: warn`, or
 `mode: block`. When `pressure: true`, warn mode reports the pressure in

@@ -16,6 +16,12 @@ defmodule Cycle.WorkflowPolicy do
     hooks: nil
   ]
 
+  @workflow_external_review_keys [
+    "enabled",
+    "route_findings_to_rework",
+    "rework_state"
+  ]
+
   @type t :: %__MODULE__{
           hash: String.t(),
           agent: map(),
@@ -40,16 +46,33 @@ defmodule Cycle.WorkflowPolicy do
   end
 
   defp front_matter(content) do
-    case String.split(content, "\n", parts: 2) do
-      ["---", rest] ->
-        case String.split(rest, "\n---", parts: 2) do
-          [yaml, _body] -> {:ok, yaml}
-          [_] -> {:error, "missing YAML front matter"}
+    lines = String.split(content, "\n")
+
+    case lines do
+      [line | rest] ->
+        if front_matter_delimiter?(line) do
+          closing_front_matter(rest, [])
+        else
+          {:error, "missing YAML front matter"}
         end
 
       _ ->
         {:error, "missing YAML front matter"}
     end
+  end
+
+  defp closing_front_matter([], _yaml), do: {:error, "missing YAML front matter"}
+
+  defp closing_front_matter([line | rest], yaml) do
+    if front_matter_delimiter?(line) do
+      {:ok, yaml |> Enum.reverse() |> Enum.join("\n")}
+    else
+      closing_front_matter(rest, [line | yaml])
+    end
+  end
+
+  defp front_matter_delimiter?(line) when is_binary(line) do
+    Regex.match?(~r/^---[ \t\r]*$/, line)
   end
 
   defp parse_yaml(yaml) do
@@ -164,6 +187,7 @@ defmodule Cycle.WorkflowPolicy do
       "hard_require_human_review",
       "review_judge.hard_require_human_review"
     )
+    |> validate_external_review(review_judge)
   end
 
   defp validate_review_judge(errors, %{"review_judge" => _}),
@@ -232,7 +256,8 @@ defmodule Cycle.WorkflowPolicy do
   defp extract_review_judge(data) do
     case Map.get(data, "review_judge") do
       review_judge when is_map(review_judge) ->
-        copy_keys(review_judge, [
+        review_judge
+        |> copy_keys([
           "enabled",
           "source_state",
           "review_state",
@@ -244,11 +269,25 @@ defmodule Cycle.WorkflowPolicy do
           "minimum_skip_confidence",
           "hard_require_human_review"
         ])
+        |> maybe_put_external_review(review_judge)
 
       _ ->
         %{}
     end
   end
+
+  defp maybe_put_external_review(result, %{"external_review" => external_review})
+       when is_map(external_review) do
+    safe_external_review = copy_keys(external_review, @workflow_external_review_keys)
+
+    if map_size(safe_external_review) == 0 do
+      result
+    else
+      Map.put(result, "external_review", safe_external_review)
+    end
+  end
+
+  defp maybe_put_external_review(result, _review_judge), do: result
 
   defp extract_worker(data) do
     case Map.get(data, "worker") do
@@ -298,9 +337,18 @@ defmodule Cycle.WorkflowPolicy do
 
   defp validate_string(errors, map, key, path) do
     case Map.fetch(map, key) do
-      {:ok, value} when is_binary(value) and value != "" -> errors
-      {:ok, _value} -> [%{path: path, reason: "must be a non-empty string"} | errors]
-      :error -> errors
+      {:ok, value} when is_binary(value) ->
+        if String.trim(value) != "" do
+          errors
+        else
+          [%{path: path, reason: "must be a non-empty string"} | errors]
+        end
+
+      {:ok, _value} ->
+        [%{path: path, reason: "must be a non-empty string"} | errors]
+
+      :error ->
+        errors
     end
   end
 
@@ -310,6 +358,43 @@ defmodule Cycle.WorkflowPolicy do
       {:ok, _value} -> [%{path: path, reason: "must be a boolean"} | errors]
       :error -> errors
     end
+  end
+
+  defp validate_external_review(errors, %{"external_review" => external_review})
+       when is_map(external_review) do
+    errors
+    |> reject_operator_external_review_keys(external_review)
+    |> validate_boolean(external_review, "enabled", "review_judge.external_review.enabled")
+    |> validate_boolean(
+      external_review,
+      "route_findings_to_rework",
+      "review_judge.external_review.route_findings_to_rework"
+    )
+    |> validate_string(
+      external_review,
+      "rework_state",
+      "review_judge.external_review.rework_state"
+    )
+  end
+
+  defp validate_external_review(errors, %{"external_review" => _external_review}),
+    do: [%{path: "review_judge.external_review", reason: "must be a mapping"} | errors]
+
+  defp validate_external_review(errors, _review_judge), do: errors
+
+  defp reject_operator_external_review_keys(errors, external_review) do
+    external_review
+    |> Map.keys()
+    |> Enum.reject(&(&1 in @workflow_external_review_keys))
+    |> Enum.reduce(errors, fn key, acc ->
+      [
+        %{
+          path: "review_judge.external_review.#{key}",
+          reason: "belongs in Cycle operator config"
+        }
+        | acc
+      ]
+    end)
   end
 
   defp validate_confidence(errors, map, key, path) do

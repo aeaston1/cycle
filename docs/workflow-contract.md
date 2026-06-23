@@ -37,12 +37,20 @@ Cycle may read these workflow sections:
 - `review_judge.policy`
 - `review_judge.minimum_skip_confidence`
 - `review_judge.hard_require_human_review`
+- `review_judge.external_review` only as a project-level refinement when the
+  operator-level external review feature flag is enabled
 - `worker.ssh_hosts`
 - `worker.max_concurrent_agents_per_host`
 - `hooks` only for display and pass-through in the first Cycle versions
 
 Cycle should not need to understand every prompt, instruction, or engine detail
 inside `WORKFLOW.md`.
+
+External review provider wiring belongs in Cycle-owned operator config and is
+disabled by default. Repo workflows may refine that config or disable it for a
+project, but they cannot enable the provider unless the operator-level feature
+flag is already enabled. Repo workflows also cannot turn on workspace-mutating
+external fix behavior.
 
 Cycle should also compare the fields it reads against global policy and store
 whether each project is in policy, drifting, or invalid.

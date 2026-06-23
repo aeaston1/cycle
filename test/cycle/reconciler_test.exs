@@ -128,8 +128,491 @@ defmodule Cycle.ReconcilerTest do
       assert [%ReviewRouter.Result{status: :written}] = result.review_results
       assert [%{status: "drift"}] = result.discovery.records
       assert result.decisions == []
+      assert result.dispatched == []
       assert_received {:review_routed, "AEA-200", "proceed_to_merging", "sha256:" <> _hash}
       assert_received {:scheduler_states, ["Todo", "In Progress"]}
+    end)
+  end
+
+  test "project workflow cannot enable external review when operator flag is disabled" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path, external_review_enabled: true)
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", _states, _opts ->
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(parent, {:review_routed, issue.identifier, decision.decision, opts[:review_state]})
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      external_review_starter = fn _registry_path, job_id, _issue, _evidence, _policy, _opts ->
+        send(parent, {:external_review_started, job_id})
+        :ok
+      end
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 local_checkout_paths: [checkout_path],
+                 issue_lister: issue_lister,
+                 review_evidence_builder: &external_review_evidence/3,
+                 review_judge_runner: __MODULE__.ProceedRunner,
+                 review_router: review_router,
+                 external_review_starter: external_review_starter,
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%ReviewRouter.Result{status: :written}] = result.review_results
+      assert_received {:review_routed, "AEA-200", "proceed_to_merging", "Human Review"}
+      refute_received {:external_review_started, _job_id}
+    end)
+  end
+
+  test "external review starts asynchronously and completed findings route to rework" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path, active_states: ["Todo", "In Progress", "Rework"])
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{
+            "CYCLE_HOME" => cycle_home,
+            "LINEAR_API_KEY" => "lin_test",
+            "CYCLE_REVIEW_EXTERNAL_ENABLED" => "true"
+          },
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", _states, _opts ->
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(
+          parent,
+          {:review_routed, issue.identifier, decision.decision, opts[:review_state],
+           opts[:evidence_hash], Enum.map(decision.hard_stops, & &1.code)}
+        )
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      external_review_starter = fn registry_path, job_id, issue, _evidence, _policy, opts ->
+        send(parent, {:external_review_started, job_id})
+
+        assert {:ok, _record} =
+                 Cycle.ReviewJudgeRegistry.record(
+                   registry_path,
+                   external_review_record(job_id, issue),
+                   now: opts[:now]
+                 )
+
+        :ok
+      end
+
+      common_opts = [
+        linear_client: client,
+        local_checkout_paths: [checkout_path],
+        issue_lister: issue_lister,
+        review_evidence_builder: &external_review_evidence/3,
+        review_judge_runner: __MODULE__.ProceedRunner,
+        review_router: review_router,
+        external_review_starter: external_review_starter,
+        engine_health_opts: [
+          dir?: fn _path -> false end,
+          executable?: fn _path -> false end
+        ],
+        now: ~U[2026-05-22 12:00:00Z]
+      ]
+
+      assert {:ok, first} = Reconciler.reconcile_once(config, common_opts)
+
+      assert [%ReviewRouter.Result{status: :skipped, reason_code: "external_review_started"}] =
+               first.review_results
+
+      assert_received {:external_review_started, "external-review-AEA-200-" <> _suffix}
+      refute_received {:review_routed, _, _, _, _, _}
+
+      assert {:ok, second} = Reconciler.reconcile_once(config, common_opts)
+      assert [%ReviewRouter.Result{status: :written}] = second.review_results
+
+      assert_received {:review_routed, "AEA-200", "require_human_review", "Rework",
+                       "sha256:" <> _hash, [:external_review_findings]}
+    end)
+  end
+
+  test "external review findings fall back to human review when rework is not active" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path)
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{
+            "CYCLE_HOME" => cycle_home,
+            "LINEAR_API_KEY" => "lin_test",
+            "CYCLE_REVIEW_EXTERNAL_ENABLED" => "true"
+          },
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", _states, _opts ->
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(parent, {:review_routed, issue.identifier, decision.decision, opts[:review_state]})
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      external_review_starter = fn registry_path, job_id, issue, _evidence, _policy, opts ->
+        assert {:ok, _record} =
+                 Cycle.ReviewJudgeRegistry.record(
+                   registry_path,
+                   external_review_record(job_id, issue),
+                   now: opts[:now]
+                 )
+
+        :ok
+      end
+
+      common_opts = [
+        linear_client: client,
+        local_checkout_paths: [checkout_path],
+        issue_lister: issue_lister,
+        review_evidence_builder: &external_review_evidence/3,
+        review_judge_runner: __MODULE__.ProceedRunner,
+        review_router: review_router,
+        external_review_starter: external_review_starter,
+        engine_health_opts: [
+          dir?: fn _path -> false end,
+          executable?: fn _path -> false end
+        ],
+        now: ~U[2026-05-22 12:00:00Z]
+      ]
+
+      assert {:ok, first} = Reconciler.reconcile_once(config, common_opts)
+
+      assert [%ReviewRouter.Result{status: :skipped, reason_code: "external_review_started"}] =
+               first.review_results
+
+      assert {:ok, second} = Reconciler.reconcile_once(config, common_opts)
+      assert [%ReviewRouter.Result{status: :written}] = second.review_results
+
+      assert_received {:review_routed, "AEA-200", "require_human_review", "Human Review"}
+    end)
+  end
+
+  test "stale active external review forces human review" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path, active_states: ["Todo", "In Progress", "Rework"])
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{
+            "CYCLE_HOME" => cycle_home,
+            "LINEAR_API_KEY" => "lin_test",
+            "CYCLE_REVIEW_EXTERNAL_ENABLED" => "true"
+          },
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", _states, _opts ->
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(
+          parent,
+          {:review_routed, issue.identifier, decision.decision, opts[:review_state],
+           Enum.map(decision.hard_stops, & &1.code)}
+        )
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      external_review_starter = fn _registry_path, job_id, _issue, _evidence, _policy, _opts ->
+        send(parent, {:external_review_started, job_id})
+        :ok
+      end
+
+      common_opts = [
+        linear_client: client,
+        local_checkout_paths: [checkout_path],
+        issue_lister: issue_lister,
+        review_evidence_builder: &external_review_evidence/3,
+        review_judge_runner: __MODULE__.ProceedRunner,
+        review_router: review_router,
+        external_review_starter: external_review_starter,
+        engine_health_opts: [
+          dir?: fn _path -> false end,
+          executable?: fn _path -> false end
+        ]
+      ]
+
+      assert {:ok, first} =
+               Reconciler.reconcile_once(
+                 config,
+                 Keyword.put(common_opts, :now, ~U[2026-05-22 12:00:00Z])
+               )
+
+      assert [%ReviewRouter.Result{status: :skipped, reason_code: "external_review_started"}] =
+               first.review_results
+
+      assert_received {:external_review_started, "external-review-AEA-200-" <> _suffix}
+
+      assert {:ok, second} =
+               Reconciler.reconcile_once(
+                 config,
+                 Keyword.put(common_opts, :now, ~U[2026-05-22 12:03:00Z])
+               )
+
+      assert [%ReviewRouter.Result{status: :written}] = second.review_results
+
+      assert_received {:review_routed, "AEA-200", "require_human_review", "Human Review",
+                       [:external_review_timeout]}
+
+      refute_received {:external_review_started, _job_id}
+    end)
+  end
+
+  test "failed external review record without summary forces human review" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path, active_states: ["Todo", "In Progress", "Rework"])
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{
+            "CYCLE_HOME" => cycle_home,
+            "LINEAR_API_KEY" => "lin_test",
+            "CYCLE_REVIEW_EXTERNAL_ENABLED" => "true"
+          },
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", _states, _opts ->
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(
+          parent,
+          {:review_routed, issue.identifier, decision.decision, opts[:review_state],
+           Enum.map(decision.hard_stops, & &1.code)}
+        )
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      external_review_starter = fn registry_path, job_id, issue, _evidence, _policy, opts ->
+        assert {:ok, _record} =
+                 Cycle.ReviewJudgeRegistry.record(
+                   registry_path,
+                   failed_external_review_record(job_id, issue),
+                   now: opts[:now]
+                 )
+
+        :ok
+      end
+
+      common_opts = [
+        linear_client: client,
+        local_checkout_paths: [checkout_path],
+        issue_lister: issue_lister,
+        review_evidence_builder: &external_review_evidence/3,
+        review_judge_runner: __MODULE__.ProceedRunner,
+        review_router: review_router,
+        external_review_starter: external_review_starter,
+        engine_health_opts: [
+          dir?: fn _path -> false end,
+          executable?: fn _path -> false end
+        ],
+        now: ~U[2026-05-22 12:00:00Z]
+      ]
+
+      assert {:ok, first} = Reconciler.reconcile_once(config, common_opts)
+
+      assert [%ReviewRouter.Result{status: :skipped, reason_code: "external_review_started"}] =
+               first.review_results
+
+      assert {:ok, second} = Reconciler.reconcile_once(config, common_opts)
+      assert [%ReviewRouter.Result{status: :written}] = second.review_results
+
+      assert_received {:review_routed, "AEA-200", "require_human_review", "Human Review",
+                       [:external_review_failed]}
+    end)
+  end
+
+  test "wrong workspace git evidence forces human review before the runner is called" do
+    Cycle.TestSupport.with_isolated_cycle_env(%{}, fn %{cycle_home: cycle_home} ->
+      name = unique_stub()
+      checkout_path = Path.join(cycle_home, "checkout")
+      write_review_workflow!(checkout_path)
+      stub_linear(name)
+      parent = self()
+
+      {:ok, config} =
+        Cycle.Config.load(
+          env: %{"CYCLE_HOME" => cycle_home, "LINEAR_API_KEY" => "lin_test"},
+          home: cycle_home
+        )
+
+      client =
+        Client.new(
+          token: "lin_test",
+          req_options: Cycle.TestSupport.linear_graphql_req_options(name)
+        )
+
+      issue_lister = fn
+        _client, "project-id", ["Human Review"], _opts ->
+          {:ok, [client_issue(%{"state" => %{"name" => "Human Review", "type" => "started"}})]}
+
+        _client, "project-id", _states, _opts ->
+          {:ok, []}
+      end
+
+      review_router = fn issue, decision, opts ->
+        send(
+          parent,
+          {:review_routed, issue.identifier, decision.decision,
+           Enum.map(decision.hard_stops, & &1.code), opts[:evidence_hash]}
+        )
+
+        %ReviewRouter.Result{
+          status: :written,
+          issue: issue,
+          message: "review routed",
+          details: %{"decision" => decision.decision}
+        }
+      end
+
+      assert {:ok, result} =
+               Reconciler.reconcile_once(config,
+                 linear_client: client,
+                 local_checkout_paths: [checkout_path],
+                 issue_lister: issue_lister,
+                 review_evidence_builder: &wrong_workspace_review_evidence/3,
+                 review_judge_runner: __MODULE__.UnexpectedRunner,
+                 review_router: review_router,
+                 engine_health_opts: [
+                   dir?: fn _path -> false end,
+                   executable?: fn _path -> false end
+                 ],
+                 now: ~U[2026-05-22 12:00:00Z]
+               )
+
+      assert [%ReviewRouter.Result{status: :written}] = result.review_results
+      assert result.decisions == []
+
+      assert_received {:review_routed, "AEA-200", "require_human_review", [:workspace_mismatch],
+                       "sha256:" <> _hash}
     end)
   end
 
@@ -420,6 +903,14 @@ defmodule Cycle.ReconcilerTest do
     end
   end
 
+  defmodule UnexpectedRunner do
+    @behaviour Cycle.Policy.ReviewJudge.Runner
+
+    def run(_prompt, _model_config) do
+      raise "review judge runner should not be called for hard-stop evidence"
+    end
+  end
+
   defp review_evidence(issue, _client, opts) do
     %Evidence{
       issue: %{"id" => issue.id, "identifier" => issue.identifier, "title" => issue.title},
@@ -432,6 +923,101 @@ defmodule Cycle.ReconcilerTest do
       global_policy_version: opts[:global_policy_version],
       stable_hash_input: %{"issue" => %{"identifier" => issue.identifier}}
     }
+  end
+
+  defp external_review_evidence(issue, _client, opts) do
+    cycle_home = opts[:run_store_path] |> Path.dirname()
+    workspace_path = Path.join([cycle_home, "workspaces", issue.identifier])
+    File.mkdir_p!(workspace_path)
+
+    evidence = %Evidence{
+      issue: %{"id" => issue.id, "identifier" => issue.identifier, "title" => issue.title},
+      labels: issue.labels || [],
+      comments: [],
+      workpad: nil,
+      run: %{
+        "id" => "run-id",
+        "workspace_path" => workspace_path,
+        "evidence" => [%{"type" => "validation", "status" => "passed"}]
+      },
+      git: %{
+        "workspace_path" => workspace_path,
+        "changed_files" => [],
+        "has_changes" => false
+      },
+      workflow_policy_version: opts[:workflow_policy_version],
+      global_policy_version: opts[:global_policy_version]
+    }
+
+    %{evidence | stable_hash_input: Cycle.Policy.ReviewEvidence.stable_hash_input(evidence)}
+  end
+
+  defp external_review_record(job_id, issue) do
+    %{
+      "id" => job_id,
+      "issue" => %{"id" => issue.id, "identifier" => issue.identifier},
+      "project" => %{"id" => "project-id", "name" => "Cycle Fixture"},
+      "status" => "completed",
+      "decision" => "require_human_review",
+      "reason_code" => "external_review_findings",
+      "message" => "external review found 1 actionable finding",
+      "hard_stops" => [],
+      "details" => %{
+        "external_review" => %{
+          "provider" => "clawpatch",
+          "execution" => "local_workspace",
+          "status" => "findings",
+          "reason_code" => "external_review_findings",
+          "message" => "external review found 1 actionable finding",
+          "findings_count" => 1,
+          "severity_breakdown" => %{"high" => 1},
+          "artifact_path" => "/tmp/cycle/reviews/AEA-200.json",
+          "fingerprint" => "sha256:" <> String.duplicate("a", 64)
+        }
+      }
+    }
+  end
+
+  defp failed_external_review_record(job_id, issue) do
+    %{
+      "id" => job_id,
+      "issue" => %{"id" => issue.id, "identifier" => issue.identifier},
+      "project" => %{"id" => "project-id", "name" => "Cycle Fixture"},
+      "status" => "failed",
+      "decision" => "require_human_review",
+      "reason_code" => "external_review_failed",
+      "message" => "external review failed",
+      "hard_stops" => [],
+      "details" => %{}
+    }
+  end
+
+  defp wrong_workspace_review_evidence(issue, _client, opts) do
+    run_workspace_path =
+      opts[:workspace_path] || Path.join(System.tmp_dir!(), "cycle-run-#{issue.identifier}")
+
+    git_workspace_path = Path.join(Path.dirname(run_workspace_path), "wrong-#{issue.identifier}")
+
+    evidence = %Evidence{
+      issue: %{"id" => issue.id, "identifier" => issue.identifier, "title" => issue.title},
+      labels: issue.labels || [],
+      comments: [],
+      workpad: nil,
+      run: %{
+        "id" => "run-id",
+        "workspace_path" => run_workspace_path,
+        "evidence" => [%{"type" => "validation", "status" => "passed"}]
+      },
+      git: %{
+        "workspace_path" => git_workspace_path,
+        "changed_files" => [],
+        "has_changes" => false
+      },
+      workflow_policy_version: opts[:workflow_policy_version],
+      global_policy_version: opts[:global_policy_version]
+    }
+
+    %{evidence | stable_hash_input: Cycle.Policy.ReviewEvidence.stable_hash_input(evidence)}
   end
 
   defp seed_retrying_run!(cycle_home) do
@@ -488,8 +1074,17 @@ defmodule Cycle.ReconcilerTest do
     """)
   end
 
-  defp write_review_workflow!(root) do
+  defp write_review_workflow!(root, opts \\ []) do
     File.mkdir_p!(root)
+    active_states = Keyword.get(opts, :active_states, ["Todo", "In Progress"])
+
+    external_review =
+      if Keyword.get(opts, :external_review_enabled),
+        do: """
+          external_review:
+            enabled: true
+        """,
+        else: ""
 
     File.write!(Path.join(root, "WORKFLOW.md"), """
     ---
@@ -497,8 +1092,7 @@ defmodule Cycle.ReconcilerTest do
       max_concurrent_agents: 2
     tracker:
       active_states:
-        - Todo
-        - In Progress
+    #{Enum.map_join(active_states, "\n", &"    - #{&1}")}
       terminal_states:
         - Done
     review_judge:
@@ -508,6 +1102,7 @@ defmodule Cycle.ReconcilerTest do
       proceed_state: Merging
       policy: standard
       minimum_skip_confidence: medium
+    #{external_review}
     ---
     Fixture workflow.
     """)

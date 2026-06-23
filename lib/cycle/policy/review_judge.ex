@@ -93,7 +93,11 @@ defmodule Cycle.Policy.ReviewJudge do
   defp parse_model_output(output, policy, provenance) do
     with {:ok, parsed} <- normalize_output(output),
          true <- valid_decision?(parsed),
-         true <- valid_confidence?(parsed) do
+         true <- valid_confidence?(parsed),
+         {:ok, evidence} <- normalize_evidence(Map.get(parsed, "evidence", [])),
+         {:ok, human_review_value} <-
+           normalize_optional_text(Map.get(parsed, "human_review_value")),
+         {:ok, reason} <- normalize_optional_text(Map.get(parsed, "reason")) do
       minimum = minimum_confidence(policy)
 
       if parsed["decision"] == "proceed_to_merging" and
@@ -115,9 +119,9 @@ defmodule Cycle.Policy.ReviewJudge do
         %Decision{
           decision: parsed["decision"],
           confidence: parsed["confidence"],
-          human_review_value: Map.get(parsed, "human_review_value"),
-          reason: Map.get(parsed, "reason"),
-          evidence: Map.get(parsed, "evidence", []),
+          human_review_value: human_review_value,
+          reason: reason,
+          evidence: evidence,
           hard_stops: [],
           provenance: provenance
         }
@@ -137,6 +141,7 @@ defmodule Cycle.Policy.ReviewJudge do
     |> hard_label_stops(evidence, policy)
     |> required_missing_stops(evidence)
     |> git_unavailable_stop(evidence)
+    |> workspace_mismatch_stop(evidence)
     |> validation_evidence_stop(evidence)
     |> sensitive_surface_stops(evidence, policy)
     |> Enum.reverse()
@@ -225,6 +230,31 @@ defmodule Cycle.Policy.ReviewJudge do
 
   defp git_unavailable_stop(stops, _evidence), do: stops
 
+  defp workspace_mismatch_stop(
+         stops,
+         %Evidence{
+           git: %{"workspace_path" => git_workspace_path},
+           run: %{"workspace_path" => run_workspace_path}
+         }
+       )
+       when is_binary(git_workspace_path) and is_binary(run_workspace_path) do
+    if same_path?(git_workspace_path, run_workspace_path) do
+      stops
+    else
+      [
+        hard_stop(:workspace_mismatch, "git evidence came from a different workspace", %{
+          "git_workspace_path" => git_workspace_path,
+          "run_workspace_path" => run_workspace_path
+        })
+        | stops
+      ]
+    end
+  end
+
+  defp workspace_mismatch_stop(stops, _evidence), do: stops
+
+  defp same_path?(left, right), do: Path.expand(left) == Path.expand(right)
+
   defp validation_evidence_stop(stops, evidence) do
     if code_changes?(evidence) and not validation_evidence?(evidence) do
       [hard_stop(:missing_validation_evidence, "validation evidence is missing") | stops]
@@ -278,6 +308,39 @@ defmodule Cycle.Policy.ReviewJudge do
   defp valid_confidence?(output),
     do: Map.has_key?(@confidences, to_string(Map.get(output, "confidence")))
 
+  defp normalize_evidence(nil), do: {:ok, []}
+
+  defp normalize_evidence(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> {:ok, []}
+      evidence -> {:ok, [evidence]}
+    end
+  end
+
+  defp normalize_evidence(values) when is_list(values) do
+    if Enum.all?(values, &is_binary/1) do
+      {:ok, values |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))}
+    else
+      :error
+    end
+  end
+
+  defp normalize_evidence(_value), do: :error
+
+  defp normalize_optional_text(nil), do: {:ok, nil}
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> {:ok, nil}
+      text -> {:ok, text}
+    end
+  end
+
+  defp normalize_optional_text(value) when is_number(value) or is_boolean(value),
+    do: {:ok, to_string(value)}
+
+  defp normalize_optional_text(_value), do: :error
+
   defp minimum_confidence(policy),
     do: Map.get(policy, "minimum_skip_confidence", @default_minimum_confidence)
 
@@ -324,11 +387,25 @@ defmodule Cycle.Policy.ReviewJudge do
       String.ends_with?(pattern, "/**") ->
         String.starts_with?(path, String.trim_trailing(pattern, "/**") <> "/")
 
-      String.contains?(pattern, "*") ->
-        path == String.replace(pattern, "*", "")
+      glob_pattern?(pattern) ->
+        Regex.match?(glob_regex(pattern), path)
 
       true ->
         path == pattern or String.contains?(path, pattern)
     end
   end
+
+  defp glob_pattern?(pattern),
+    do: String.contains?(pattern, "*") or String.contains?(pattern, "?")
+
+  defp glob_regex(pattern), do: Regex.compile!("^" <> glob_to_regex(pattern) <> "$")
+
+  defp glob_to_regex(""), do: ""
+  defp glob_to_regex("**/" <> rest), do: "(?:.*/)?" <> glob_to_regex(rest)
+  defp glob_to_regex("**" <> rest), do: ".*" <> glob_to_regex(rest)
+  defp glob_to_regex("*" <> rest), do: "[^/]*" <> glob_to_regex(rest)
+  defp glob_to_regex("?" <> rest), do: "[^/]" <> glob_to_regex(rest)
+
+  defp glob_to_regex(<<char::utf8, rest::binary>>),
+    do: Regex.escape(<<char::utf8>>) <> glob_to_regex(rest)
 end

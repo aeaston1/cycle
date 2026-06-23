@@ -28,6 +28,33 @@ defmodule Cycle.Policy.ReviewJudgeTest do
     assert hard_stop_codes(decision) == [:hard_path_stop]
   end
 
+  test "hard path stop supports ordinary glob patterns" do
+    policy =
+      put_in(@policy, ["hard_require_human_review", "paths"], [
+        "config/*.exs",
+        "*.md",
+        "lib/**/*.ex"
+      ])
+
+    decision =
+      evidence(changed_files: ["config/runtime.exs"])
+      |> ReviewJudge.decide(policy, runner: __MODULE__.ProceedRunner)
+
+    assert :hard_path_stop in hard_stop_codes(decision)
+
+    decision =
+      evidence(changed_files: ["README.md"])
+      |> ReviewJudge.decide(policy, runner: __MODULE__.ProceedRunner)
+
+    assert :hard_path_stop in hard_stop_codes(decision)
+
+    decision =
+      evidence(changed_files: ["lib/cycle/policy/review_judge.ex"])
+      |> ReviewJudge.decide(policy, runner: __MODULE__.ProceedRunner)
+
+    assert :hard_path_stop in hard_stop_codes(decision)
+  end
+
   test "hard label stop returns require_human_review" do
     decision =
       evidence(labels: ["security"])
@@ -125,6 +152,24 @@ defmodule Cycle.Policy.ReviewJudgeTest do
     assert decision.provenance["model_config"]["model"] == "gpt-test"
   end
 
+  test "string model evidence is normalized before routing" do
+    decision =
+      evidence()
+      |> ReviewJudge.decide(@policy, runner: __MODULE__.StringEvidenceRunner)
+
+    assert decision.decision == "proceed_to_merging"
+    assert decision.evidence == ["tests passed"]
+  end
+
+  test "malformed optional model fields fail closed" do
+    decision =
+      evidence()
+      |> ReviewJudge.decide(@policy, runner: __MODULE__.MalformedEvidenceRunner)
+
+    assert decision.decision == "require_human_review"
+    assert hard_stop_codes(decision) == [:malformed_model_output]
+  end
+
   test "model failure returns require_human_review" do
     decision =
       evidence()
@@ -168,6 +213,34 @@ defmodule Cycle.Policy.ReviewJudgeTest do
 
     def run(_prompt, _model_config) do
       {:ok, %{"decision" => "proceed_to_merging", "confidence" => "low"}}
+    end
+  end
+
+  defmodule StringEvidenceRunner do
+    @behaviour Cycle.Policy.ReviewJudge.Runner
+
+    def run(_prompt, _model_config) do
+      {:ok,
+       %{
+         decision: "proceed_to_merging",
+         confidence: "medium",
+         reason: "Validated.",
+         evidence: "tests passed"
+       }}
+    end
+  end
+
+  defmodule MalformedEvidenceRunner do
+    @behaviour Cycle.Policy.ReviewJudge.Runner
+
+    def run(_prompt, _model_config) do
+      {:ok,
+       %{
+         decision: "proceed_to_merging",
+         confidence: "medium",
+         reason: "Validated.",
+         evidence: [%{"not" => "a string"}]
+       }}
     end
   end
 

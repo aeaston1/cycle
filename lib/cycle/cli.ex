@@ -197,9 +197,27 @@ defmodule Cycle.CLI do
         :env -> "linear:\n  api_key_env: LINEAR_API_KEY\n"
       end
 
-    File.write!(config_file(), content)
-    File.chmod(config_file(), 0o600)
+    write_config_file_securely!(config_file(), content)
     puts("Saved Linear configuration to #{config_file()}")
+  end
+
+  defp write_config_file_securely!(path, content) do
+    parent = Path.dirname(path)
+
+    temp_path =
+      Path.join(parent, ".#{Path.basename(path)}.#{System.unique_integer([:positive])}.tmp")
+
+    try do
+      File.write!(temp_path, "", [:exclusive])
+      File.chmod!(temp_path, 0o600)
+      File.write!(temp_path, content)
+      File.rename!(temp_path, path)
+      File.chmod!(path, 0o600)
+    rescue
+      error ->
+        File.rm(temp_path)
+        reraise error, __STACKTRACE__
+    end
   end
 
   defp symphony(["install" | rest]), do: symphony_install(rest)
@@ -236,7 +254,8 @@ defmodule Cycle.CLI do
         puts("Symphony engine already exists: #{target}")
         puts("Updating with git fetch, checkout, and fast-forward pull...")
 
-        with :ok <- git(["-C", target, "fetch", "--tags", "origin"], "fetch Symphony engine"),
+        with :ok <- ensure_symphony_remote_matches(target, repo),
+             :ok <- git(["-C", target, "fetch", "--tags", "origin"], "fetch Symphony engine"),
              :ok <- git(["-C", target, "checkout", ref], "checkout Symphony ref"),
              :ok <- fast_forward_branch(target, ref) do
           :ok
@@ -446,6 +465,12 @@ defmodule Cycle.CLI do
 
     puts(
       "  review judge: #{judge["source_queue_count"]} queued, #{judge["active_count"]} active, #{judge["duplicate_skips"]} duplicate skips, #{judge["route_failures"]} route failures"
+    )
+
+    external_review = judge["external_review"] || %{}
+
+    puts(
+      "  external review: #{external_review["active"] || 0} active, #{external_review["completed"] || 0} completed, #{external_review["failures"] || 0} failures, #{external_review["findings"] || 0} findings"
     )
 
     Enum.each(judge["last_decisions"], fn decision ->
@@ -868,6 +893,45 @@ defmodule Cycle.CLI do
           {:error, "#{message}: #{sanitized}", 2}
         end
     end
+  end
+
+  defp git_output(args, label) do
+    case System.cmd("git", args, stderr_to_stdout: true) do
+      {output, 0} ->
+        {:ok, String.trim(output)}
+
+      {output, _status} ->
+        sanitized = output |> redact_url() |> String.trim()
+        message = "external dependency failed: git #{label}"
+
+        if sanitized == "" do
+          {:error, message, 2}
+        else
+          {:error, "#{message}: #{sanitized}", 2}
+        end
+    end
+  end
+
+  defp ensure_symphony_remote_matches(target, requested_repo) do
+    with {:ok, existing_repo} <-
+           git_output(["-C", target, "remote", "get-url", "origin"], "read Symphony origin") do
+      if same_repo?(existing_repo, requested_repo) do
+        :ok
+      else
+        {:error,
+         "existing Symphony checkout origin #{redact_url(existing_repo)} does not match requested repo #{redact_url(requested_repo)}",
+         3}
+      end
+    end
+  end
+
+  defp same_repo?(left, right), do: normalize_repo_url(left) == normalize_repo_url(right)
+
+  defp normalize_repo_url(repo) do
+    repo
+    |> strip_url_credentials()
+    |> String.trim()
+    |> String.trim_trailing("/")
   end
 
   defp fast_forward_branch(target, ref) do
